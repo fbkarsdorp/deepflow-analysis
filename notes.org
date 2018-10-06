@@ -1,0 +1,19 @@
+* Research Questions
+  1. What linguistic differences guide authenticity detection?
+  2. Which linguistic features correspond with _perceived_ authenticity?
+** TODO Objective Authenticity [0/9]
+   - [ ] Average accuracy (report Odds Ratio)
+   - [ ] Is there a learning effect?
+   - [ ] Is there an effect of the game level? I.e. do participants perform worse on
+         higher levels in the game?
+   - [ ] Is there a difference between identifying original and generated examples?
+   - [ ] Is the 'forreal' game easier or harder than the 'choose' game?
+   - [ ] Are there differences between generation systems?
+   - [ ] Are there differences between sections of the corpus (e.g. in terms of artist, or
+         time period)?
+   - [ ] Classification experiment of linguistic features to distinguish real from fake.
+** TODO Subjective Authenticity
+   - [ ] Is there a bias towards responding "original" or "generated"?
+   - [ ] Is there an effect of time on the responses?
+   - [ ] What are the linguistic predictors of _perceived_ authenticity?
+   - [ ] Are original examples more likely to be judged "real" than generated examples?

@@ -12,7 +12,7 @@
    - [ ] Are there differences between sections of the corpus (e.g. in terms of artist, or
          time period)?
    - [ ] Classification experiment of linguistic features to distinguish real from fake.
-** TODO Subjective Authenticity
+** TODO Subjective Authenticity [0/4]
    - [ ] Is there a bias towards responding "original" or "generated"?
    - [ ] Is there an effect of time on the responses?
    - [ ] What are the linguistic predictors of _perceived_ authenticity?

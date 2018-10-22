@@ -8,10 +8,12 @@ df <- subset(df, select=-c(real, fake))
 df <- df[df$user_answer != 0,]
 df$user_answer <- 2 - df$user_answer
 df$true_answer <- 2 - df$true_answer
+# remove all games which were early stopped
+df <- df[df$test_id %in%  names(table(df$test_id))[table(df$test_id) >= 10],]
 df$test_id <- as.factor(df$test_id)
 df$correct <- abs(1 - as.integer(df$correct))
-df$trial_id = df$level * 5 + df$iteration
-df$time = df$time / 10000
+df$trial_id = scale(df$level * 5 + df$iteration)
+df$time = scale(df$time)
 head(df)
 
 ## Objective authenticity
@@ -39,9 +41,8 @@ summary(m_type)
 
 ## Is there a training effect in the game? That is, do participants
 ## get more experienced throughout the game
-library (lme4)
 mod = glmer (correct ~ trial_id + (1|test_id), data=df[df$trial_id <= 10,],
-             family='binomial', nAGQ=0)
+             family='binomial')
 summary(mod)
 drop1(mod, test='Chisq')
 
@@ -53,24 +54,26 @@ exp(quantile(as.matrix(mod)[,2], probs=c(.5, .025, .975)) * 100)
 
 ## Does the trial effect depend on the type of game?
 mod = glmer (correct ~ trial_id * type + (1|test_id),
-             data=df, family='binomial')
+             data=df[df$trial_id <= 10,], family='binomial')
 summary(mod)
 drop1(mod, test='Chisq') # no, it doesn't
 
 # is the time participants took advantageous?
-mod <- glmer(correct ~ time + (1|test_id), data=df, family="binomial")
+mod <- glmer(correct ~ time + (1|test_id), data=df[df$trial_id <= 10,], family="binomial")
 summary(mod)
 
-## test for generation level effects
+## test for generation level effects (since we noticed a training effect
+## incorporate this into the model as an interaction effect)
+mod = glmer(correct ~ genlevel + trial_id + (1|test_id),
+          data=df[df$trial_id <= 10,], family="binomial")
+summary(mod)
+Anova(mod) # we see that while there is a training effect, this
+           # does not affect (the estimates of) genlevel.
+
 m_correct <- brm(correct ~ genlevel + (1|test_id),
                  data=df, family='bernoulli')
 summary(m_correct)
 plot(m_correct)
-
-m_real.conditional <- brm(user_answer ~ genlevel + conditional + (1|test_id),
-                         data=df, family='bernoulli')
-summary(m_real.conditional)
-plot(m_real.conditional)
 
 
 ## Perceived authenticity
@@ -88,8 +91,7 @@ summary(p_baseline)
 plot(p_baseline)
 # compute the odds
 b <- summary(p_baseline)$fixed[1, c(1, 3, 4)]
-exp(b) # yes, it appears there is towards fake
-
+exp(b) # no, there is not
 
 df <- df[(df$true_answer == 0) & (df$type == "forreal"),]
 

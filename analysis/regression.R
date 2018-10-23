@@ -1,6 +1,8 @@
 library(brms)
 require(ggplot2)
 library(lme4)
+library(sjPlot)
+library(car)
 
 df <- read.csv("../data/db_data.csv")
 df <- subset(df, select=-c(real, fake))
@@ -12,7 +14,11 @@ df$true_answer <- 2 - df$true_answer
 df <- df[df$test_id %in%  names(table(df$test_id))[table(df$test_id) >= 10],]
 df$test_id <- as.factor(df$test_id)
 df$correct <- abs(1 - as.integer(df$correct))
-df$trial_id = scale(df$level * 5 + df$iteration)
+df$trial_id = df$level * 5 + df$iteration
+df = df[df$trial_id <= 10,]
+df$trial_id = df$trial_id / 10 # rescale for easier interpretation of coefficients
+df$time = df$time / 1000 # convert to minutes
+df$time[df$time > 15] = 15
 df$time = scale(df$time)
 head(df)
 
@@ -28,20 +34,20 @@ b <- summary(m_baseline)$fixed[1, c(1, 3, 4)]
 exp(b)
 
 ## Is the forreal game easier than the choose game?
-mod = glmer (correct ~ type + (1|test_id), data=df[df$trial_id <= 10,],
+mod = glmer (correct ~ type + (1|test_id), data=df,
              family='binomial', nAGQ=0)
 summary(mod)
 drop1(mod, test='Chisq')
 ## it appears that participants perform significantly worse on the forreal test
 ## Test again with bayesian model
 
-m_type = brm(correct ~ type + (1|test_id), data=df[df$trial_id <= 10,],
+m_type = brm(correct ~ type + (1|test_id), data=df,
              family='bernoulli')
 summary(m_type)
 
 ## Is there a training effect in the game? That is, do participants
 ## get more experienced throughout the game
-mod = glmer (correct ~ trial_id + (1|test_id), data=df[df$trial_id <= 10,],
+mod = glmer (correct ~ trial_id + (1|test_id), data=df,
              family='binomial')
 summary(mod)
 drop1(mod, test='Chisq')
@@ -56,27 +62,61 @@ exp(quantile(as.matrix(mod)[,2], probs=c(.5, .025, .975)) * 100)
 mod = glmer (correct ~ trial_id * type + (1|test_id),
              data=df[df$trial_id <= 10,], family='binomial')
 summary(mod)
-drop1(mod, test='Chisq') # no, it doesn't
+Anova(mod) # no, it doesn't
+plot_model(mod, type="pred", terms=c("trial_id", "type"))
+
+## Does the trial effect depend on whether real or fake was the correct answer?
+mod = glmer(correct ~ trial_id * true_answer * type + (1|test_id), data=df, family="binomial")
+summary(mod)
+Anova(mod) # yes it does, quite strongly. 
+plot_model(mod, type="pred", terms=c("trial_id", "true_answer", "type"))
 
 # is the time participants took advantageous?
-mod <- glmer(correct ~ time + (1|test_id), data=df[df$trial_id <= 10,], family="binomial")
+mod <- glmer(correct ~ time * type + (1|test_id), data=df, family="binomial")
 summary(mod)
+Anova(mod)
+plot_model(mod, type="pred", terms=c("time", "type"))
 
 ## test for generation level effects (since we noticed a training effect
 ## incorporate this into the model as an interaction effect)
-mod = glmer(correct ~ genlevel + trial_id + (1|test_id),
-          data=df[df$trial_id <= 10,], family="binomial")
-summary(mod)
-Anova(mod) # we see that while there is a training effect, this
-           # does not affect (the estimates of) genlevel.
+df_gen <- df[((df$true_answer == 0) & (df$type == "forreal")) | df$type == "choose",]
 
-m_correct <- brm(correct ~ genlevel + (1|test_id),
-                 data=df, family='bernoulli')
+# without forreal=real tests, is there an effect of training experience?
+mod = glmer(correct ~ trial_id + (1|test_id), data=df_gen, family="binomial")
+summary(mod)
+Anova(mod) # no there isn't
+plot_model(mod, type="pred", terms=c("trial_id"))
+
+# but it seems to differ between game types:
+mod = glmer(correct ~ trial_id * type + (1|test_id), data=df_gen, family="binomial")
+summary(mod)
+Anova(mod) # cf. the significant interaction.
+plot_model(mod, type="pred", terms=c("trial_id", "type"))
+
+# having established all these (interacting) effects, we go for the following model:
+mod = glmer(correct ~ genlevel * (type * trial_id) + (1|test_id),
+            data=df_gen, family="binomial", nAGQ=0)
+summary(mod)
+Anova(mod) # there is no significant interaction between genlevel and (trial * type)
+plot_model(mod, type = "pred", terms = c("trial_id", "genlevel", "type"))
+
+m_correct <- brm(correct ~ genlevel * (type * trial_id) + (1|test_id),
+                 data=df_gen, family='bernoulli')
 summary(m_correct)
 plot(m_correct)
 
+# next we can do the same with conditional (we might also combine them in a single model)
+mod = glmer(correct ~ conditional * (type * trial_id) + (1|test_id),
+            data=df_gen, family="binomial")
+summary(mod)
+Anova(mod) # there is no significant interaction between conditional and (trial * type)
+plot_model(mod, type = "pred", terms = c("trial_id", "conditional", "type"))
 
+
+##########################################################################################
 ## Perceived authenticity
+##########################################################################################
+
 df = df[(df$type == "forreal"),]
 
 # there is no bias towards real or fake:

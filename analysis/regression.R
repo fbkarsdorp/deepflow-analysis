@@ -11,7 +11,7 @@ df <- df[df$user_answer != 0,]
 df$user_answer <- 2 - df$user_answer
 df$true_answer <- 2 - df$true_answer
 # remove all games which were early stopped
-df <- df[df$test_id %in%  names(table(df$test_id))[table(df$test_id) >= 10],]
+df <- df[df$test_id %in% names(table(df$test_id))[table(df$test_id) >= 10],]
 df$test_id <- as.factor(df$test_id)
 df$correct <- abs(1 - as.integer(df$correct))
 df$trial_id = df$level * 5 + df$iteration
@@ -117,33 +117,93 @@ plot_model(mod, type = "pred", terms = c("trial_id", "conditional", "type"))
 ## Perceived authenticity
 ##########################################################################################
 
-df = df[(df$type == "forreal"),]
+dffr = df[(df$type == "forreal"),]
 
 # there is no bias towards real or fake:
-prop.table(table(df$user_answer))
+prop.table(table(dffr$user_answer))
 
 ## but original lyrics appear more likely to be classifified as real:
-aggregate(user_answer ~ true_answer, df, mean)
+aggregate(user_answer ~ true_answer, dffr, mean)
 
-## us there a bias towards fake or real
-p_baseline <- brm(user_answer ~ 1 + (1|test_id), data=df, family="bernoulli")
+## Is there a bias towards fake or real
+p_baseline <- brm(user_answer ~ 1 + (1|test_id), data=dffr, family="bernoulli")
 summary(p_baseline)
 plot(p_baseline)
 # compute the odds
 b <- summary(p_baseline)$fixed[1, c(1, 3, 4)]
 exp(b) # no, there is not
 
-df <- df[(df$true_answer == 0) & (df$type == "forreal"),]
+# repeat with lme4
+mod = glmer(user_answer ~ 1 + (1|test_id), data=dffr, family="binomial")
+summary(mod)
 
-m_real <- brm(user_answer ~ genlevel + (1|test_id),
+# as the game progresses, does the bias change?
+mod = glmer(user_answer ~ trial_id * true_answer + (1|test_id),
+            data=dffr, family="binomial")
+summary(mod)
+Anova(mod) # it seems so, yes
+plot_model(mod, type="pred", terms=c("trial_id"))
+
+# is this any differerent for real or fake examples?
+mod = glmer(user_answer ~ trial_id * true_answer + (1|test_id),
+            data=dffr, family="binomial")
+summary(mod)
+Anova(mod) # yes, it is: the bias towards real increases over time
+plot_model(mod, type="pred", terms=c("trial_id", "true_answer"))
+
+# We previously saw an interesting effect of time per question on the objective
+# authenticity. Does that also affect the bias towards fake or real?
+mod = glmer(user_answer ~ time * true_answer + (1|test_id), data=dffr, family="binomial")
+summary(mod)
+Anova(mod) # yes, it does, though especially for real examples.
+plot_model(mod, type="pred", terms=c("time", "true_answer"))
+
+# note, however, that there is evidence that participants differ
+# substantially in their response to time
+mod2 = glmer(user_answer ~ time * true_answer + (1 + time|test_id),
+             data=dffr, family="binomial", nAGQ=0)
+summary(mod2)
+# compare the two models with anova:
+anova(mod, mod2) # we would need to test this with Bayesian models
+                 # using LOO, which is more robust for this kind of thing
+
+# Test for effect of different models on perceived authenticity. First
+# we restrict the data to the forreal examples presenting generated lyrics:
+df_gen <- df[(df$true_answer == 0) & (df$type == "forreal"),]
+
+# is there an effect of the different models on subjective authenticity?
+mod = glmer(user_answer ~ genlevel * trial_id + (1|test_id), data=df_gen, family = "binomial")
+summary(mod)
+Anova(mod) # yes, again for syllable and hybrid
+plot_model(mod, type="pred", terms=c("time", "genlevel"))
+
+m_real <- brm(user_answer ~ genlevel * trial_id + (1|test_id),
               data=df, family='bernoulli')
 summary(m_real)
 plot(m_real)
 
-m_real.conditional <- brm(user_answer ~ genlevel + conditional + (1|test_id),
+# is there an effect of conditional models on subjective authenticity?
+mod = glmer(user_answer ~ conditional * trial_id + (1|test_id),
+            data=df_gen, family = "binomial")
+summary(mod)
+Anova(mod) # yes, conditionally generated lyrics are more often judged to be real
+           # and, interestingly, don't appear to be affected by a training interaction.
+plot_model(mod, type="pred", terms=c("trial_id", "conditional"))
+
+# combining conditioning and genlevel as non-interacting effects, we 
+# observe similar patterns:
+mod = glmer(user_answer ~ (conditional + genlevel) * trial_id + (1|test_id),
+            data=df_gen, family = "binomial")
+summary(mod)
+Anova(mod) # We see that conditioning on average pushes participants into 
+           # the direction of "real" judgements and the hybrid and syllable
+           # models are, in comparison to the char level model, 
+           # more often judged to be real. Furthemore, We observe a slight 
+           # effect of training in the non-conditioning case whereas this does not
+           # exists for lyrics generated _with_ conditioning
+plot_model(mod, type="pred", terms=c("trial_id", "genlevel", "conditional"))
+
+m_real.conditional <- brm(user_answer ~ (genlevel + conditional) * trial_id + (1|test_id),
                          data=df, family='bernoulli')
 summary(m_real.conditional)
 plot(m_real.conditional)
-
-aggregate(user_answer ~ genlevel, df, mean)
-aggregate(user_answer ~ genlevel + conditional, df, mean)

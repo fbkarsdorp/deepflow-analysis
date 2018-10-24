@@ -17,12 +17,14 @@ df$correct <- abs(1 - as.integer(df$correct))
 df$trial_id = df$level * 5 + df$iteration
 df = df[df$trial_id <= 10,]
 df$trial_id = df$trial_id / 10 # rescale for easier interpretation of coefficients
-df$time = df$time / 1000 # convert to minutes
+df$time = df$time / 1000 # convert to seconds
 df$time[df$time > 15] = 15
-df$time = scale(df$time)
+df$time = scale(df$time) # scale and center with mean = 0
 head(df)
 
+##########################################################################################
 ## Objective authenticity
+##########################################################################################
 
 ## First test for a baseline model
 prop.table(table(df$correct))
@@ -74,7 +76,10 @@ plot_model(mod, type="pred", terms=c("trial_id", "true_answer", "type"))
 # is the time participants took advantageous?
 mod <- glmer(correct ~ time * type + (1|test_id), data=df, family="binomial")
 summary(mod)
-Anova(mod)
+Anova(mod) # no, it appears that participants perform worse when they
+           # take more time. How to explain this? Is that because the 
+           # examples are harder? Or is that irrespective of the 
+           # difficulty of the examples?
 plot_model(mod, type="pred", terms=c("time", "type"))
 
 ## test for generation level effects (since we noticed a training effect
@@ -207,3 +212,25 @@ m_real.conditional <- brm(user_answer ~ (genlevel + conditional) * trial_id + (1
                          data=df, family='bernoulli')
 summary(m_real.conditional)
 plot(m_real.conditional)
+
+
+##########################################################################################
+## Linguistic Feature analysis
+##########################################################################################
+
+sample2pair <- read.csv('../data/id2pairid.csv', sep="\t")
+
+features <- read.csv('../data/samples.features.csv')
+features$X <- NULL # drop index column
+
+# add pair_ids to each sample
+features <- merge(x=features, y=sample2pair, by.x="sample_id", by.y="fake", all.x=TRUE)
+features <- merge(x=features, y=sample2pair, by.x="sample_id", by.y="true", all.x=TRUE)
+features$pair_id <- features$pair.x
+features$pair_id[is.na(features$pair.x)] <- features$pair.y[is.na(features$pair.x)]
+features[, c("pair.x", "pair.y", "true", "fake")] <- list(NULL) # drop unused columns
+features <- features[complete.cases(features[, c("pair_id")]),] # filter NAs
+features <- subset(features, select=-c(line))
+
+# next merge feature table with main dataframe for user judgements
+features = merge(x=features, y=df, by="pair_id")

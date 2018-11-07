@@ -18,10 +18,15 @@ df$test_id <- as.factor(df$test_id)
 df$correct <- abs(1 - as.integer(df$correct))
 df$trial_id = df$level * 5 + df$iteration
 df = df[df$trial_id <= 11,] # 10 rounds + sudden death
-df$trial_id = df$trial_id / 10 # rescale for easier interpretation of coefficients
+df$trial_id = df$trial_id / 11 # rescale for easier interpretation of coefficients
 df$time = df$time / 1000 # convert to seconds
 df$time[df$time > 15] = 15
 ## df$time = scale(df$time) # scale and center with mean = 0
+
+# TODO: clean users with weird timings
+# TODO: check for really fast answers
+# TODO: separate analysis for experts
+
 head(df)
 
 ##########################################################################################
@@ -63,7 +68,7 @@ summary(m_trial)
 exp(quantile(as.matrix(mod)[,2], probs=c(.5, .025, .975)) * 100)
 
 ## Does the trial effect depend on the type of game?
-mod = glmer (correct ~ trial_id * type + (1|test_id),
+mod = glmer(correct ~ trial_id * type + (1|test_id),
              data=df[df$trial_id <= 10,], family='binomial')
 summary(mod)
 Anova(mod) # no, it doesn't
@@ -219,6 +224,8 @@ plot(m_real.conditional)
 ##########################################################################################
 ## Linguistic Feature analysis
 ##########################################################################################
+# Add abs(difference between features in choose case)
+# Find out if there's some transfer learning going on between game types.
 
 sample2pair <- read.csv('../data/id2pairid.csv', sep="\t")
 

@@ -3,6 +3,8 @@ require(ggplot2)
 library(lme4)
 library(sjPlot)
 library(car)
+library(dplyr)
+library(standardize)
 
 df <- read.csv("../data/db_data.csv")
 df <- subset(df, select=-c(real, fake))
@@ -15,11 +17,11 @@ df <- df[df$test_id %in% names(table(df$test_id))[table(df$test_id) >= 10],]
 df$test_id <- as.factor(df$test_id)
 df$correct <- abs(1 - as.integer(df$correct))
 df$trial_id = df$level * 5 + df$iteration
-df = df[df$trial_id <= 10,]
+df = df[df$trial_id <= 11,] # 10 rounds + sudden death
 df$trial_id = df$trial_id / 10 # rescale for easier interpretation of coefficients
 df$time = df$time / 1000 # convert to seconds
 df$time[df$time > 15] = 15
-df$time = scale(df$time) # scale and center with mean = 0
+## df$time = scale(df$time) # scale and center with mean = 0
 head(df)
 
 ##########################################################################################
@@ -220,17 +222,50 @@ plot(m_real.conditional)
 
 sample2pair <- read.csv('../data/id2pairid.csv', sep="\t")
 
-features <- read.csv('../data/samples.features.csv')
+features <- read.csv('../data/samples.features.full.csv')
 features$X <- NULL # drop index column
-
 # add pair_ids to each sample
-features <- merge(x=features, y=sample2pair, by.x="sample_id", by.y="fake", all.x=TRUE)
-features <- merge(x=features, y=sample2pair, by.x="sample_id", by.y="true", all.x=TRUE)
+features <- merge(x=features, y=sample2pair, by.x="id", by.y="fake", all.x=TRUE)
+features <- merge(x=features, y=sample2pair, by.x="id", by.y="true", all.x=TRUE)
 features$pair_id <- features$pair.x
 features$pair_id[is.na(features$pair.x)] <- features$pair.y[is.na(features$pair.x)]
-features[, c("pair.x", "pair.y", "true", "fake")] <- list(NULL) # drop unused columns
-features <- features[complete.cases(features[, c("pair_id")]),] # filter NAs
+features[, c("pair.x", "pair.y")] <- list(NULL) # drop unused columns
+## features <- features[complete.cases(features[, c("pair_id")]),] # filter NAs
 features <- subset(features, select=-c(line))
-
 # next merge feature table with main dataframe for user judgements
 features = merge(x=features, y=df, by="pair_id")
+features = features[features$type == "forreal",]
+
+features = features[!((features$true_answer == 0) & (is.na(features$true))),]
+features = features[!((features$true_answer == 1) & (is.na(features$fake))),]
+nrow(features)
+
+# scale predictors 
+predictors = c("alliteration", "lzw", "pc.words", "stressed.vowel.repetitiveness", "word.length",
+               "word.onset.repetitiveness", "pronouns", "syllable.repetitiveness", "word.entropy",
+               "word.length.syllables", "word.repetitiveness")
+
+formula = as.formula(paste("user_answer ~ (", paste(predictors, collapse = "+"), ") + (1|test_id)"))
+regr <- standardize(formula, data=features, family = "binomial", scale=1)
+
+mod = glmer(regr$formula, data=regr$data, family = "binomial", nAGQ=0)
+summary(mod)
+plot_model(mod, type="pred", terms=c("word.onset.repetitiveness", "type"))
+
+formula = as.formula(paste("user_answer ~ (", paste(predictors, collapse = "+"), ")"))
+regr <- standardize(formula, data=features, family = "binomial", scale=1)
+mod = brm(regr$formula, data=regr$data, family = "bernoulli",
+          prior = c(set_prior("student_t(7, 0, 2.5)", class = "b")))
+summary(mod)
+
+vs = varsel(mod, method="forward", cv_method='LOO')
+varsel_plot(vs, stats = c('elpd', 'rmse', 'acc'), deltas=F)
+(nv <- suggest_size(vs, alpha=0.1)) # 0.1
+projrhs <- project(vs, nv = nv, ns = 4000)
+round(colMeans(as.matrix(projrhs)), 1)
+(postint  <- round(posterior_interval(as.matrix(projrhs)),1))
+
+library(randomForest)
+
+rf = randomForest(regr$formula, data=regr$data, importance=T, ntree=1000)
+varImpPlot(rf, type="1")

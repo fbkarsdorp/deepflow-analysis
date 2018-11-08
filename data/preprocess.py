@@ -188,11 +188,16 @@ def preprocess_db(dbpath, pairspath, samplespath,
                 sample2pair[obj["true_id"]] = obj['id']
                 sample2pair[obj["false_id"]] = obj['id']
 
+    done = 0
     with open(samplespath) as f:
         for line in f:
             obj = json.loads(line.strip())
             if obj['id'] not in sample2pair:
                 continue
+
+            done += 1
+            if done % 100 == 0:
+                print(".", end="", flush=True)
 
             sample = {}
             sample['id'] = obj['id']
@@ -247,3 +252,5 @@ if __name__ == '__main__':
     samples = preprocess_db(
         PATHS['db'], PATHS['pairs'], PATHS['samples'],
         phon_dict, pc_words, prons, freqs, total_freqs)
+
+    pd.DataFrame.from_dict(samples).to_csv('db_features.csv')

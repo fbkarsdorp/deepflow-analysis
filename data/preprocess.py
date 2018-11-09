@@ -158,7 +158,7 @@ def extract_features(sample, phon_dict, pc_words, prons, freqs, total_freqs):
     features['nwords'] = nwords
     features['nchars'] = sum(len(w) for line in words for w in line)
     features['nlines'] = len(words)
-    sentences = [' '.join(s) for s in read_sample(sample, words=True, source='line')]
+    sentences = [' '.join(s) for s in read_sample(sample, words=True)]
     for key, val in syntactic_features.get_features(sentences).items():
         features[key] = val
 
@@ -188,6 +188,9 @@ def preprocess_db(dbpath, pairspath, samplespath,
                 sample2pair[obj["true_id"]] = obj['id']
                 sample2pair[obj["false_id"]] = obj['id']
 
+    print("processing {} samples".format(len(sample2pair)))
+    print("processing {} pairs".format(len(db_pair)))
+
     done = 0
     with open(samplespath) as f:
         for line in f:
@@ -198,6 +201,8 @@ def preprocess_db(dbpath, pairspath, samplespath,
             done += 1
             if done % 100 == 0:
                 print(".", end="", flush=True)
+            if done % 1000 == 0:
+                print(done, end="", flush=True)
 
             sample = {}
             sample['id'] = obj['id']

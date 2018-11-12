@@ -10,6 +10,7 @@ import loaders
 import lzw
 from syllabify import syllabify
 import syntactic_features
+import rhyme_features
 
 
 PATHS = {
@@ -161,6 +162,9 @@ def extract_features(sample, phon_dict, pc_words, prons, freqs, total_freqs):
     sentences = [' '.join(s) for s in read_sample(sample, words=True)]
     for key, val in syntactic_features.get_features(sentences).items():
         features[key] = val
+    # rhyme features
+    for key, val in rhyme_features.get_features(words, phon_dict).items():
+        features[key] = val
 
     return features
 
@@ -234,7 +238,7 @@ def preprocess_db(dbpath, pairspath, samplespath,
 if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser()
-    # total_samples=5000
+    # total_samples = 5000
 
     args = parser.parse_args()
 

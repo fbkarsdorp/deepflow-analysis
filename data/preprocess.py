@@ -174,7 +174,7 @@ def preprocess_db(dbpath, pairspath, samplespath,
     samples = []
     # read info from db_data by pair id
     db_pair = {}
-    db_keys = 'score iteration level type pair_id true_answer user_answer correct time'
+    db_keys = 'test_id score iteration level type pair_id true_answer user_answer correct time'
     for _, row in pd.DataFrame.from_csv(dbpath).iterrows():
         db_pair[row['pair_id']] = {key: row[key] for key in db_keys.split()}
 

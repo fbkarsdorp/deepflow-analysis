@@ -1,6 +1,7 @@
 
 import os
 import json
+import collections
 import itertools
 import pandas as pd
 import numpy as np
@@ -152,7 +153,6 @@ def extract_features(sample, phon_dict, pc_words, prons, freqs, total_freqs):
         len([w for line in words for w in line if w in prons]) / nwords
     # lexical diversity wrt general corpus
     features['word-entropy'] = word_entropy(words, freqs, total_freqs)
-    features['line'] = words
     features['lzw'] = len(' '.join([w for l in words for w in l])) / \
         len(lzw.compress(' '.join([w for l in words for w in l])))
     # syntactic features
@@ -171,49 +171,44 @@ def extract_features(sample, phon_dict, pc_words, prons, freqs, total_freqs):
 
 def preprocess_db(dbpath, pairspath, samplespath,
                   phon_dict, pc_words, prons, freqs, total_freqs):
-    samples = []
-    # read info from db_data by pair id
-    db_pair = {}
-    db_keys = 'test_id score iteration level type pair_id true_answer user_answer correct time'
-    for _, row in pd.DataFrame.from_csv(dbpath).iterrows():
-        db_pair[row['pair_id']] = {key: row[key] for key in db_keys.split()}
-
-    sample2pair = {}   # map sample ids to pair ids
-
+    db = pd.read_csv(dbpath, index_col=None)
+    # read target pair ids from db dump
+    db_pairs = set(db['pair_id'])
     # get sample ids and pair scores from turing-pairs.jsonl
+    sample2pair = {}   # map sample ids to pair ids
+    pair2sample = collections.defaultdict(set)   # map pair ids to sample ids
+    pairscores = {}    # store also pair scores while we are at it
     with open(pairspath) as f:
         for line in f:
             obj = json.loads(line.strip())
-            pair_id = obj['id']
-            if pair_id in db_pair:
+            if obj['id'] in db_pairs:
                 # store score assigned by adversary discriminator
-                db_pair[pair_id]['pair_score'] = obj['score']
+                pairscores[obj['id']] = obj['score']
                 # store ids
                 sample2pair[obj["true_id"]] = obj['id']
                 sample2pair[obj["false_id"]] = obj['id']
+                pair2sample[obj['id']].add(obj["true_id"])
+                pair2sample[obj['id']].add(obj["false_id"])
 
     print("processing {} samples".format(len(sample2pair)))
-    print("processing {} pairs".format(len(db_pair)))
+    print("processing {} pairs".format(len(db_pairs)))
 
-    done = 0
+    features = {}
     with open(samplespath) as f:
         for line in f:
             obj = json.loads(line.strip())
             if obj['id'] not in sample2pair:
                 continue
+            if obj['id'] in features:
+                print("found duplicate sample with id", obj['id'])
 
-            done += 1
-            if done % 100 == 0:
+            if features and len(features) % 100 == 0:
                 print(".", end="", flush=True)
-            if done % 1000 == 0:
-                print(done, end="", flush=True)
+            if features and len(features) % 1000 == 0:
+                print(len(features), end="", flush=True)
 
             sample = {}
             sample['id'] = obj['id']
-            # - db data
-            for key, val in db_pair[sample2pair[obj['id']]].items():
-                sample[key] = val
-            # - sample data
             modeltype, conditional = MODELDATA[sample.get('model')]
             sample['modeltype'] = modeltype
             sample['conditional'] = conditional
@@ -223,16 +218,39 @@ def preprocess_db(dbpath, pairspath, samplespath,
                 sample['source'] = 'fake'
                 sample['tau'] = obj['params']['tau']
                 sample['tries'] = obj['params']['tries']
-                sample['model-ppl'] = \
+                sample['model_ppl'] = \
                     sum(l['params']['score'] for l in obj['text']) / len(obj['text'])
             # - feature extraction
             for k, v in extract_features(
                     obj, phon_dict, pc_words, prons, freqs, total_freqs).items():
                 sample[k] = v
 
-            samples.append(sample)
+            features[sample['id']] = sample
 
-    return samples
+    db_keys = 'test_id score iteration level type pair_id'.split() + \
+              'true_answer user_answer correct time'.split()
+    output = []
+    for _, row in db.iterrows():
+        outputrow = {}
+        # - db data
+        for db_key in db_keys:
+            outputrow[db_key] = row[db_key]
+        # - pair data (from turing)
+        outputrow['pair_score'] = pairscores[row['pair_id']]
+        # - samples
+        for sampleid in pair2sample[row['pair_id']]:
+            sample = {}
+            # skip unseen member of pair for forreal questions
+            if row['type'] == 'forreal':
+                if row['true_answer'] == 1 and features[sampleid]['source'] == 'fake':
+                    continue
+                if row['true_answer'] == 2 and features[sampleid]['source'] == 'real':
+                    continue
+            for key, val in features[sampleid].items():
+                sample[key] = val
+            output.append(dict(sample, **outputrow))
+
+    return output
 
 
 if __name__ == '__main__':

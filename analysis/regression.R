@@ -5,10 +5,9 @@ library(sjPlot)
 library(car)
 library(dplyr)
 library(standardize)
+library(cowplot)
 
 df <- read.csv("../data/db_data.csv")
-df <- subset(df, select=-c(real, fake))
-## df <- df[df$type == "forreal", ]
 df <- df[df$user_answer != 0,]
 df$user_answer <- 2 - df$user_answer
 df$true_answer <- 2 - df$true_answer
@@ -21,7 +20,6 @@ df = df[df$trial_id <= 11,] # 10 rounds + sudden death
 df$trial_id = df$trial_id / 11 # rescale for easier interpretation of coefficients
 df$time = df$time / 1000 # convert to seconds
 df$time[df$time > 15] = 15
-## df$time = scale(df$time) # scale and center with mean = 0
 
 # TODO: clean users with weird timings
 # TODO: check for really fast answers
@@ -42,46 +40,43 @@ plot(mod)
 b <- summary(m_baseline)$fixed[1, c(1, 3, 4)]
 exp(b)
 
-## Is the forreal game easier than the choose game?
-mod = glmer (correct ~ type + (1|test_id), data=df,
-             family='binomial', nAGQ=0)
-summary(mod)
-drop1(mod, test='Chisq')
-## it appears that participants perform significantly worse on the forreal test
-## Test again with bayesian model
+coda = posterior_samples(m_baseline)
+a = data.frame(correct = coda[,1])
+a = apply(a, 2, function(x) 1 / (1 + exp(-x)))
+tn = t(as.matrix(apply(a, 2, function(x) quantile(x, probs=c(.5, .025, .975)))))
+tn = round(tn * 100, 2)
+tn
 
 m_type = brm(correct ~ type + (1|test_id), data=df,
              family='bernoulli')
+
 summary(m_type)
 
-## Is there a training effect in the game? That is, do participants
-## get more experienced throughout the game
-mod = glmer (correct ~ trial_id + (1|test_id), data=df,
-             family='binomial')
-summary(mod)
-drop1(mod, test='Chisq')
+coda = posterior_samples(m_type)
+a = data.frame(choose = coda[,1], forreal = coda[,1] + coda[,2])
+a = apply(a, 2, function(x) 1 / (1 + exp(-x)))
+tn = t(as.matrix(apply(a, 2, function(x) quantile(x, probs=c(.5, .025, .975)))))
+tn = round(tn * 100, 1)
+tn
 
-## it appears there is 
-## test again with bayesian LM
-m_trial = brm(correct ~ trial_id + (1|test_id), data=df, family='bernoulli')
+regr = standardize(correct ~ trial_id + (1|test_id), data=df, family="binomial", scale=1.0)
+m_trial = brm(regr$formula, regr$data, family='bernoulli')
 summary(m_trial)
-exp(quantile(as.matrix(mod)[,2], probs=c(.5, .025, .975)) * 100)
+exp(summary(m_trial)$fixed[2, c(1, 3, 4)])
 
 ## Does the trial effect depend on the type of game?
-mod = glmer(correct ~ trial_id * type + (1|test_id),
-             data=df[df$trial_id <= 10,], family='binomial')
-summary(mod)
-Anova(mod) # no, it doesn't
-plot_model(mod, type="pred", terms=c("trial_id", "type"))
+regr = standardize(correct ~ trial_id * type + (1|test_id), data=df, family="binomial", scale=1.0)
+m_type_trial = brm(regr$formula, regr$data, family = 'bernoulli')
+summary(m_type_trial)
 
 ## Does the trial effect depend on whether real or fake was the correct answer?
-mod = glmer(correct ~ trial_id * true_answer * type + (1|test_id), data=df, family="binomial")
-summary(mod)
-Anova(mod) # yes it does, quite strongly. 
-plot_model(mod, type="pred", terms=c("trial_id", "true_answer", "type"))
+regr = standardize(correct ~ trial_id * true_answer + (1|test_id), data=df[df$type=="forreal",], family="binomial")
+m_trial_true = brm(regr$formula, data=regr$data, family = "bernoulli")
+summary(m_trial_true)
 
 # is the time participants took advantageous?
-mod <- glmer(correct ~ time * type + (1|test_id), data=df, family="binomial")
+regr = standardize(correct ~ time * type + (1|test_id), data=df, family = 'binomial')
+mod <- glmer(regr$formula, data=regr$data, family="binomial")
 summary(mod)
 Anova(mod) # no, it appears that participants perform worse when they
            # take more time. How to explain this? Is that because the 
@@ -93,132 +88,183 @@ plot_model(mod, type="pred", terms=c("time", "type"))
 ## incorporate this into the model as an interaction effect)
 df_gen <- df[((df$true_answer == 0) & (df$type == "forreal")) | df$type == "choose",]
 
-# without forreal=real tests, is there an effect of training experience?
-mod = glmer(correct ~ trial_id + (1|test_id), data=df_gen, family="binomial")
-summary(mod)
-Anova(mod) # no there isn't
-plot_model(mod, type="pred", terms=c("trial_id"))
-
-# but it seems to differ between game types:
-mod = glmer(correct ~ trial_id * type + (1|test_id), data=df_gen, family="binomial")
-summary(mod)
-Anova(mod) # cf. the significant interaction.
-plot_model(mod, type="pred", terms=c("trial_id", "type"))
-
-# having established all these (interacting) effects, we go for the following model:
-mod = glmer(correct ~ genlevel * (type * trial_id) + (1|test_id),
-            data=df_gen, family="binomial", nAGQ=0)
-summary(mod)
-Anova(mod) # there is no significant interaction between genlevel and (trial * type)
-plot_model(mod, type = "pred", terms = c("trial_id", "genlevel", "type"))
-
-m_correct <- brm(correct ~ genlevel * (type * trial_id) + (1|test_id),
-                 data=df_gen, family='bernoulli')
+# test for differences between language models:
+regr = standardize(correct ~ genlevel + (1|test_id), data=df_gen, family = 'binomial', scale=1)
+m_correct <- brm(correct ~ genlevel + (1|test_id), data=df_gen, family='bernoulli')
 summary(m_correct)
 plot(m_correct)
 
-# next we can do the same with conditional (we might also combine them in a single model)
-mod = glmer(correct ~ conditional * (type * trial_id) + (1|test_id),
-            data=df_gen, family="binomial")
-summary(mod)
-Anova(mod) # there is no significant interaction between conditional and (trial * type)
-plot_model(mod, type = "pred", terms = c("trial_id", "conditional", "type"))
+coda = posterior_samples(m_correct)
+a = data.frame(char = coda[,1], hybrid=coda[,1] + coda[,2], syl=coda[,1] + coda[,3])
+a = apply(a, 2, function(x) 1 / (1 + exp(-x)))
+tn = t(as.matrix(apply(a, 2, function(x) quantile(x, probs=c(.5, .025, .975)))))
+tn = round(tn * 100, 1)
 
+# include differences between game types
+regr = standardize(correct ~ genlevel * type + (1|test_id), data=df_gen, family = 'binomial', scale=1)
+m_correct_t = brm(regr$formula, data=regr$data, family = "bernoulli")
+summary(m_correct_t)
+
+coda = posterior_samples(m_correct_t)
+head(colnames(coda), 10)
+
+a = data.frame(syl_forreal = coda[,1] - coda[,4],
+               syl_choose = coda[,1] + coda[,4],
+               char_forreal = coda[,1] + coda[,2] - coda[,4],
+               char_choose = coda[,1] + coda[,2] + coda[,4] + coda[,5],
+               hybrid_forreal = coda[,1] + coda[,3] - coda[,4],
+               hybrid_choose = coda[,1] + coda[,3] + coda[,4] + coda[,6])
+a = apply(a, 2, function(x) 1 / (1 + exp(-x)))
+tn = t(as.matrix(apply(a, 2, function(x) quantile(x, probs=c(.5, .025, .975)))))
+tn = round(tn * 100, 1)
+tn
+
+p_genlevel = marginal_effects(m_correct_t, "genlevel:type")
+
+# next we can do the same with conditional (we might also combine them in a single model)
+
+regr = standardize(correct ~ conditional + (1|test_id), data=df_gen, family = 'binomial', scale=1)
+m_correct_c = brm(regr$formula, data=regr$data, family = 'bernoulli')
+summary(m_correct_c)
+
+exp(summary(m_correct_c)$fixed[2, c(1, 3, 4)])
+
+regr = standardize(correct ~ conditional * type + (1|test_id), data=df_gen, family = 'binomial', scale=1)
+m_correct_cond = brm(regr$formula, data=regr$data, family = 'bernoulli')
+summary(m_correct_cond)
+
+coda = posterior_samples(m_correct_cond)
+head(colnames(coda), 10)
+
+a = data.frame(uc_fr = coda[,1],
+               uc_ch = coda[,1] + coda[,3] - coda[,2],
+               co_fr = coda[,1] - coda[,3] + coda[,2],
+               co_ch = coda[,1] + coda[,2] + coda[,3] + coda[,4])
+a = apply(a, 2, function(x) 1 / (1 + exp(-x)))
+tn = t(as.matrix(apply(a, 2, function(x) quantile(x, probs=c(.5, .025, .975)))))
+tn = round(tn * 100, 1)
+tn
+
+p_conditional = marginal_effects(m_correct_cond, "conditional:type")
+
+plots = cowplot::plot_grid(plot(p_genlevel)[[1]], plot(p_conditional)[[1]], labels = c("a)", "b)"), align="h")
+cowplot::save_plot("../images/model-interactions.pdf", plots, dpi=300, base_width=10,
+                   base_height=5, base_aspect_ratio = 1.3)
 
 ##########################################################################################
 ## Perceived authenticity
 ##########################################################################################
 
-dffr = df[(df$type == "forreal"),]
+# The perceived authenticity is equal to the user answer in forreal questions
+df$perceived = df$user_answer
+# The perceived authenticity in choose questions is equal to whether the answer was correct or not.
+df[df$type == "choose", "perceived"] = 1 - df[df$type == "choose", "correct"]
 
-# there is no bias towards real or fake:
-prop.table(table(dffr$user_answer))
+# there is a slight bias towards real:
+prop.table(table(df$perceived))
 
-## but original lyrics appear more likely to be classifified as real:
-aggregate(user_answer ~ true_answer, dffr, mean)
+## but this appears only to be the case in choose questions.
+aggregate(perceived ~ type, df, mean)
 
 ## Is there a bias towards fake or real
-p_baseline <- brm(user_answer ~ 1 + (1|test_id), data=dffr, family="bernoulli")
+p_baseline <- brm(perceived ~ 1 + (1|test_id), data=df,
+                  control=list(adapt_delta=0.95),
+                  family="bernoulli")
 summary(p_baseline)
 plot(p_baseline)
 # compute the odds
 b <- summary(p_baseline)$fixed[1, c(1, 3, 4)]
-exp(b) # no, there is not
+round(exp(b), 1)
 
-# repeat with lme4
-mod = glmer(user_answer ~ 1 + (1|test_id), data=dffr, family="binomial")
-summary(mod)
+coda = posterior_samples(p_baseline)
+a = data.frame(bias = coda[,1])
+a = apply(a, 2, function(x) 1 / (1 + exp(-x)))
+tn = t(as.matrix(apply(a, 2, function(x) quantile(x, probs=c(.5, .025, .975)))))
+tn = round(tn * 100, 1)
+tn
+
+# measure bias for different game types
+p_basetype <- brm(perceived ~ type + (1|test_id), data=df,
+                  control=list(adapt_delta=0.95),
+                  family="bernoulli")
+summary(p_basetype)
+plot(p_basetype)
+
+coda = posterior_samples(p_basetype)
+head(colnames(coda))
+
+a = data.frame(bias_choose = coda[,1],
+               bias_forreal = coda[,1] + coda[,2])
+a = apply(a, 2, function(x) 1 / (1 + exp(-x)))
+tn = t(as.matrix(apply(a, 2, function(x) quantile(x, probs=c(.5, .025, .975)))))
+tn = round(tn * 100, 1)
+tn
 
 # as the game progresses, does the bias change?
-mod = glmer(user_answer ~ trial_id * true_answer + (1|test_id),
-            data=dffr, family="binomial")
+regr = standardize(perceived ~ trial_id + (1|test_id), data=df, family = 'binomial')
+mod = glmer(regr$formula, data=regr$data, family="binomial")
 summary(mod)
 Anova(mod) # it seems so, yes
 plot_model(mod, type="pred", terms=c("trial_id"))
 
-# is this any differerent for real or fake examples?
-mod = glmer(user_answer ~ trial_id * true_answer + (1|test_id),
-            data=dffr, family="binomial")
-summary(mod)
-Anova(mod) # yes, it is: the bias towards real increases over time
-plot_model(mod, type="pred", terms=c("trial_id", "true_answer"))
-
 # We previously saw an interesting effect of time per question on the objective
 # authenticity. Does that also affect the bias towards fake or real?
-mod = glmer(user_answer ~ time * true_answer + (1|test_id), data=dffr, family="binomial")
+regr = standardize(perceived ~ time * true_answer + (1|test_id),
+                   data=df[df$type=="forreal",], family = 'binomial')
+mod = glmer(regr$formula, data=regr$data, family="binomial")
 summary(mod)
 Anova(mod) # yes, it does, though especially for real examples.
+           # QUESTION: what examples are we dealing with here?
 plot_model(mod, type="pred", terms=c("time", "true_answer"))
 
-# note, however, that there is evidence that participants differ
-# substantially in their response to time
-mod2 = glmer(user_answer ~ time * true_answer + (1 + time|test_id),
-             data=dffr, family="binomial", nAGQ=0)
-summary(mod2)
-# compare the two models with anova:
-anova(mod, mod2) # we would need to test this with Bayesian models
-                 # using LOO, which is more robust for this kind of thing
 
-# Test for effect of different models on perceived authenticity. First
-# we restrict the data to the forreal examples presenting generated lyrics:
-df_gen <- df[(df$true_answer == 0) & (df$type == "forreal"),]
+# include differences between game types
+df_gen <- df[((df$true_answer == 0) & (df$type == "forreal")) | df$type == "choose",]
+regr = standardize(perceived ~ genlevel * type + (1|test_id), data=df_gen, family = 'binomial', scale=1)
+p_correct_t = brm(regr$formula, data=regr$data,
+                  control=list(adapt_delta=0.95),
+                  family = "bernoulli")
+summary(p_correct_t)
 
-# is there an effect of the different models on subjective authenticity?
-mod = glmer(user_answer ~ genlevel * trial_id + (1|test_id), data=df_gen, family = "binomial")
-summary(mod)
-Anova(mod) # yes, again for syllable and hybrid
-plot_model(mod, type="pred", terms=c("time", "genlevel"))
+coda = posterior_samples(p_correct_t)
+head(colnames(coda), 10)
 
-m_real <- brm(user_answer ~ genlevel * trial_id + (1|test_id),
-              data=df, family='bernoulli')
-summary(m_real)
-plot(m_real)
+a = data.frame(syl_forreal = coda[,1] - coda[,4],
+               syl_choose = coda[,1] + coda[,4],
+               char_forreal = coda[,1] + coda[,2] - coda[,4] - coda[,5],
+               char_choose = coda[,1] + coda[,2] + coda[,4] + coda[,5],
+               hybrid_forreal = coda[,1] + coda[,3] - coda[,4] - coda[,6],
+               hybrid_choose = coda[,1] + coda[,3] + coda[,4] + coda[,6])
+a = apply(a, 2, function(x) 1 / (1 + exp(-x)))
+tn = t(as.matrix(apply(a, 2, function(x) quantile(x, probs=c(.5, .025, .975)))))
+tn = round(tn * 100, 1)
+tn
 
-# is there an effect of conditional models on subjective authenticity?
-mod = glmer(user_answer ~ conditional * trial_id + (1|test_id),
-            data=df_gen, family = "binomial")
-summary(mod)
-Anova(mod) # yes, conditionally generated lyrics are more often judged to be real
-           # and, interestingly, don't appear to be affected by a training interaction.
-plot_model(mod, type="pred", terms=c("trial_id", "conditional"))
+p_p_gen = marginal_effects(p_correct_t, "genlevel:type")
 
-# combining conditioning and genlevel as non-interacting effects, we 
-# observe similar patterns:
-mod = glmer(user_answer ~ (conditional + genlevel) * trial_id + (1|test_id),
-            data=df_gen, family = "binomial")
-summary(mod)
-Anova(mod) # We see that conditioning on average pushes participants into 
-           # the direction of "real" judgements and the hybrid and syllable
-           # models are, in comparison to the char level model, 
-           # more often judged to be real. Furthemore, We observe a slight 
-           # effect of training in the non-conditioning case whereas this does not
-           # exists for lyrics generated _with_ conditioning
-plot_model(mod, type="pred", terms=c("trial_id", "genlevel", "conditional"))
+regr = standardize(perceived ~ conditional * type + (1|test_id), data=df_gen, family = 'binomial', scale=1)
+p_correct_cond = brm(regr$formula, data=regr$data,
+                     control=list(adapt_delta=0.95),
+                     family = 'bernoulli')
+summary(p_correct_cond)
 
-m_real.conditional <- brm(user_answer ~ (genlevel + conditional) * trial_id + (1|test_id),
-                         data=df, family='bernoulli')
-summary(m_real.conditional)
-plot(m_real.conditional)
+coda = posterior_samples(p_correct_cond)
+head(colnames(coda), 10)
+
+a = data.frame(uc_fr = coda[,1],
+               uc_ch = coda[,1] + coda[,3] - coda[,2],
+               co_fr = coda[,1] - coda[,3] + coda[,2] - coda[,4],
+               co_ch = coda[,1] + coda[,2] + coda[,3] + coda[,4])
+a = apply(a, 2, function(x) 1 / (1 + exp(-x)))
+tn = t(as.matrix(apply(a, 2, function(x) quantile(x, probs=c(.5, .025, .975)))))
+tn = round(tn * 100, 1)
+tn
+
+p_p_cond = marginal_effects(p_correct_cond, "conditional:type")
+
+plots = cowplot::plot_grid(plot(p_p_gen)[[1]], plot(p_p_cond)[[1]], labels = c("a)", "b)"), align="h")
+cowplot::save_plot("../images/perceived-model-interactions.pdf", plots, dpi=300, base_width=10,
+                   base_height=5, base_aspect_ratio = 1.3)
 
 
 ##########################################################################################
@@ -227,40 +273,60 @@ plot(m_real.conditional)
 # Add abs(difference between features in choose case)
 # Find out if there's some transfer learning going on between game types.
 
-sample2pair <- read.csv('../data/id2pairid.csv', sep="\t")
+df <- read.csv("../data/db_features.csv")
 
-features <- read.csv('../data/samples.features.full.csv')
-features$X <- NULL # drop index column
-# add pair_ids to each sample
-features <- merge(x=features, y=sample2pair, by.x="id", by.y="fake", all.x=TRUE)
-features <- merge(x=features, y=sample2pair, by.x="id", by.y="true", all.x=TRUE)
-features$pair_id <- features$pair.x
-features$pair_id[is.na(features$pair.x)] <- features$pair.y[is.na(features$pair.x)]
-features[, c("pair.x", "pair.y")] <- list(NULL) # drop unused columns
-## features <- features[complete.cases(features[, c("pair_id")]),] # filter NAs
-features <- subset(features, select=-c(line))
-# next merge feature table with main dataframe for user judgements
-features = merge(x=features, y=df, by="pair_id")
-features = features[features$type == "forreal",]
+df <- df[df$user_answer != 0,]
+df$user_answer <- 2 - df$user_answer
+df$true_answer <- 2 - df$true_answer
+# remove all games which were early stopped
+df <- df[df$test_id %in% names(table(df$test_id))[table(df$test_id) >= 10],]
+df$test_id <- as.factor(df$test_id)
+df$correct <- abs(1 - as.integer(df$correct))
+df$trial_id = df$level * 5 + df$iteration
+df = df[df$trial_id <= 11,] # 10 rounds + sudden death
+df$trial_id = df$trial_id / 11 # rescale for easier interpretation of coefficients
+df$time = df$time / 1000 # convert to seconds
+df$time[df$time > 15] = 15
 
-features = features[!((features$true_answer == 0) & (is.na(features$true))),]
-features = features[!((features$true_answer == 1) & (is.na(features$fake))),]
-nrow(features)
+df <- df[order(df$pair_id), ]
+choose  <- df[df$type == "choose", ]
+
+# absolute difference across pairs
+agg <- choose %>% group_by(pair_id) %>% summarise_all(function(vals){Reduce(function(x,y){abs(x-y)}, vals, 0)})
+agg <- as.data.frame(agg)
+agg <- agg[order(agg$pair_id), ]
+
+# need to add non-numeric columns back from choose
+cols  <- c("pair_id", "tau", "tries", "model.ppl",
+           "modeltype", "conditional", "correct",
+           ## values equal across pair items should be restored
+           "time", "pair_score", "score", "test_id", "true_answer", "user_answer",
+           "iteration", "level")
+merged <- merge(choose[choose$source=="fake", cols], agg, by=c("pair_id"))
+## add new column dropinng (.x) from column name
+for(c in 2:length(cols)) {
+    merged[, cols[c]] = merged[, paste(cols[c], "x", sep=".")]
+}
+## drop .x, and .y columns
+choose = within(merged, rm(list = ls()[grepl("\\.[xy]$", ls())]))
+
 
 # scale predictors 
 predictors = c("alliteration", "lzw", "pc.words", "stressed.vowel.repetitiveness", "word.length",
                "word.onset.repetitiveness", "pronouns", "syllable.repetitiveness", "word.entropy",
-               "word.length.syllables", "word.repetitiveness")
+               "word.length.syllables", "word.repetitiveness", "mean_span", "max_span", "mean_depth",
+               "nlines", "nwords", "rhyme_density", "num_spans", "nchars")
 
 formula = as.formula(paste("user_answer ~ (", paste(predictors, collapse = "+"), ") + (1|test_id)"))
-regr <- standardize(formula, data=features, family = "binomial", scale=1)
+regr <- standardize(formula, data=df[df$type=="forreal",], family = "binomial", scale=0.5)
 
 mod = glmer(regr$formula, data=regr$data, family = "binomial", nAGQ=0)
 summary(mod)
-plot_model(mod, type="pred", terms=c("word.onset.repetitiveness", "type"))
+plot_model(mod)
+Anova(mod)
 
 formula = as.formula(paste("user_answer ~ (", paste(predictors, collapse = "+"), ")"))
-regr <- standardize(formula, data=features, family = "binomial", scale=1)
+regr <- standardize(formula, data=df[df$type=="forreal",], family = "binomial", scale=1)
 mod = brm(regr$formula, data=regr$data, family = "bernoulli",
           prior = c(set_prior("student_t(7, 0, 2.5)", class = "b")))
 summary(mod)

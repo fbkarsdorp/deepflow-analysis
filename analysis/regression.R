@@ -6,6 +6,7 @@ library(car)
 library(dplyr)
 library(standardize)
 library(cowplot)
+library(projpred)
 
 df <- read.csv("../data/db_data.csv")
 df <- df[df$user_answer != 0,]
@@ -20,6 +21,7 @@ df = df[df$trial_id <= 11,] # 10 rounds + sudden death
 df$trial_id = df$trial_id / 11 # rescale for easier interpretation of coefficients
 df$time = df$time / 1000 # convert to seconds
 df$time[df$time > 15] = 15
+
 
 # TODO: clean users with weird timings
 # TODO: check for really fast answers
@@ -274,71 +276,82 @@ cowplot::save_plot("../images/perceived-model-interactions.pdf", plots, dpi=300,
 # Find out if there's some transfer learning going on between game types.
 
 df <- read.csv("../data/db_features.csv")
-
 df <- df[df$user_answer != 0,]
 df$user_answer <- 2 - df$user_answer
 df$true_answer <- 2 - df$true_answer
+df$perceived <- df$user_answer
+## df = df[df$trial_id <= 11,] # 10 rounds + sudden death
+df[df$type == "choose", "perceived"] = 2 - as.integer(
+    factor(df[df$type == "choose", "correct"]))
+df$trial_id = df$level * 5 + df$iteration
 # remove all games which were early stopped
 df <- df[df$test_id %in% names(table(df$test_id))[table(df$test_id) >= 10],]
 df$test_id <- as.factor(df$test_id)
-df$correct <- abs(1 - as.integer(df$correct))
-df$trial_id = df$level * 5 + df$iteration
-df = df[df$trial_id <= 11,] # 10 rounds + sudden death
-df$trial_id = df$trial_id / 11 # rescale for easier interpretation of coefficients
 df$time = df$time / 1000 # convert to seconds
 df$time[df$time > 15] = 15
-
-df <- df[order(df$pair_id), ]
-choose  <- df[df$type == "choose", ]
-
-# absolute difference across pairs
-agg <- choose %>% group_by(pair_id) %>% summarise_all(function(vals){Reduce(function(x,y){abs(x-y)}, vals, 0)})
-agg <- as.data.frame(agg)
-agg <- agg[order(agg$pair_id), ]
-
-# need to add non-numeric columns back from choose
-cols  <- c("pair_id", "tau", "tries", "model.ppl",
-           "modeltype", "conditional", "correct",
-           ## values equal across pair items should be restored
-           "time", "pair_score", "score", "test_id", "true_answer", "user_answer",
-           "iteration", "level")
-merged <- merge(choose[choose$source=="fake", cols], agg, by=c("pair_id"))
-## add new column dropinng (.x) from column name
-for(c in 2:length(cols)) {
-    merged[, cols[c]] = merged[, paste(cols[c], "x", sep=".")]
-}
-## drop .x, and .y columns
-choose = within(merged, rm(list = ls()[grepl("\\.[xy]$", ls())]))
+df <- df[df$type == "forreal" | (df$type == "choose" & df$source == "fake"),]
+df$correct <- abs(1 - as.integer(df$correct))
+scores = df %>% group_by(test_id) %>% summarise(score = sum(correct))
+experts = pull(scores[scores$score >= 15,], "test_id")
+df$expert = 0
+df[df$test_id %in% experts, "expert"] = 1
 
 
-# scale predictors 
-predictors = c("alliteration", "lzw", "pc.words", "stressed.vowel.repetitiveness", "word.length",
-               "word.onset.repetitiveness", "pronouns", "syllable.repetitiveness", "word.entropy",
-               "word.length.syllables", "word.repetitiveness", "mean_span", "max_span", "mean_depth",
-               "nlines", "nwords", "rhyme_density", "num_spans", "nchars")
+predictors = c("word.entropy",                  # compression
+               "mean_depth",                    # syntax
+               "mean_span",                     # syntax
+               "nlines",                        # length
+               "pc.words",                      # content
+               "pronouns",                      # content
+               "rhyme_density",                 # rhyme
+               "stressed.vowel.repetitiveness", # sounds
+               "word.length.syllables"          # complexity
+               )
 
-formula = as.formula(paste("user_answer ~ (", paste(predictors, collapse = "+"), ") + (1|test_id)"))
-regr <- standardize(formula, data=df[df$type=="forreal",], family = "binomial", scale=0.5)
 
-mod = glmer(regr$formula, data=regr$data, family = "binomial", nAGQ=0)
-summary(mod)
-plot_model(mod)
-Anova(mod)
+formula <- as.formula(paste("source ~ (", paste(predictors, collapse = "+"), ")"))
+regr = standardize(formula, data=df, family = "binomial")
+m_objective = brm(regr$formula, data=regr$data, family = "bernoulli")
 
-formula = as.formula(paste("user_answer ~ (", paste(predictors, collapse = "+"), ")"))
-regr <- standardize(formula, data=df[df$type=="forreal",], family = "binomial", scale=1)
-mod = brm(regr$formula, data=regr$data, family = "bernoulli",
-          prior = c(set_prior("student_t(7, 0, 2.5)", class = "b")))
-summary(mod)
+set_theme(base=theme_sjplot(), geom.label.size=5, axis.textsize = 1.1)
 
-vs = varsel(mod, method="forward", cv_method='LOO')
-varsel_plot(vs, stats = c('elpd', 'rmse', 'acc'), deltas=F)
-(nv <- suggest_size(vs, alpha=0.1)) # 0.1
-projrhs <- project(vs, nv = nv, ns = 4000)
-round(colMeans(as.matrix(projrhs)), 1)
-(postint  <- round(posterior_interval(as.matrix(projrhs)),1))
+summary(m_objective)
+p_objective <- plot_model(m_objective, show.values = TRUE,
+           title = "Objective feature importance", bpe = "mean",
+           prob.inner = .5,
+           value.size=5,
+           prob.outer = .95
+           ) + ylim(c(0.5, 4.5))
 
-library(randomForest)
+formula = as.formula(paste("perceived ~ (", paste(predictors, collapse = "+"), ") + (1|test_id)"))
+regr <- standardize(formula, data=df, family = "binomial")
+m_subjective = brm(regr$formula, data=regr$data, family = "bernoulli")
 
-rf = randomForest(regr$formula, data=regr$data, importance=T, ntree=1000)
-varImpPlot(rf, type="1")
+summary(m_subjective)
+
+p_subjective <- plot_model(m_subjective, show.values = TRUE,
+           title = "Subjective feature importance", bpe = "mean",
+           prob.inner = .5,
+           prob.outer = .95,
+           value.size=5,
+           ) + ylim(c(0.7, 1.5))
+
+plots = cowplot::plot_grid(p_objective, p_subjective, labels = c("a)", "b)"), align="h")
+cowplot::save_plot("../images/feature-importance.pdf", plots, dpi=300, base_width=15,
+                   base_height=8)
+
+
+formula = as.formula(paste("perceived ~ (", paste(predictors, collapse = "+"), ") + (1|test_id)"))
+regr <- standardize(formula, data=df[df$expert == 1, ], family = "binomial")
+m_expert = brm(regr$formula, data=regr$data,
+               control=list(adapt_delta=0.95),
+               family = "bernoulli")
+
+summary(m_expert)
+
+p_expert <- plot_model(m_expert, show.values = TRUE,
+           title = "Expert feature importance", bpe = "mean",
+           prob.inner = .5,
+           prob.outer = .95,
+           value.size=5)
+p_expert

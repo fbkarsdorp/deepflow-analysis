@@ -22,7 +22,8 @@ PATHS = {
     'syllabifier': 'syllable-model.tar.gz',
     'pairs': 'turing-pairs.jsonl',
     'samples': 'samples.combined.jsonl',
-    'db': 'db_data.csv'
+    'db': 'db_data.csv',
+    'function': 'function.txt'
 }
 
 MODELDATA = {
@@ -44,18 +45,46 @@ def entropy(items, base=None):
     return scipy.stats.entropy(counts)
 
 
-def word_entropy(lines, freqs, total):
-    probs = np.array([freqs.get(w, 1e-20)/total for line in lines for w in line])
-    return -(probs*np.log(probs)).sum()
+def unigram_ppl(lines, freqs, total):
+    probs = np.array([freqs.get(w, 1e-20) / total for line in lines for w in line])
+    return np.exp(-np.sum(probs * np.log(probs)))
+
+
+def stressed_nucleus(word, phon_dict):
+    phones = phon_dict.get(word, '')
+    return next((p for p in phones.split()[::-1] if p[-1] == "1"), None)
 
 
 def assonance_entropy(lines, phon_dict):
-    def stressed_nucleus(word):
-        phones = phon_dict.get(word, '')
-        return next((p for p in phones.split()[::-1] if p[-1] == "1"), None)
-
-    scores = [entropy(stressed_nucleus(w) for w in line) for line in lines]
+    scores = [entropy(stressed_nucleus(w, phon_dict) for w in line) for line in lines]
     return sum(scores) / len(scores)
+
+
+def assonance(lines, phon_dict, blacklist):
+    counts = collections.Counter(
+        filter(None, (stressed_nucleus(w, phon_dict)
+                      for line in lines
+                      for w in line if w.lower() not in blacklist)))
+    if not counts:
+        return 0
+    return counts.most_common(1)[0][1] / sum(len(l) for l in lines)
+
+
+def repeated_words(lines):
+    repeats, last, c = [], None, 0
+    for line in lines:
+        for w in line:
+            if not last:
+                last = w
+            else:
+                if w == last:
+                    c += 1
+                else:
+                    repeats.append(c)
+                    c = 0
+                    last = w
+
+    return max(repeats) / sum(len(l) for l in lines)
 
 
 def onset(word, phon_dict):
@@ -86,7 +115,7 @@ def vocab_entropy(lines):
     return entropy(word for line in lines for word in line)
 
 
-def extract_features(sample, phon_dict, pc_words, prons, freqs, total_freqs):
+def extract_features(sample, phon_dict, pc_words, prons, freqs, total_freqs, function):
     features = {}
     sylls = utils.read_sample(sample)
     words = utils.read_sample(sample, words=True)
@@ -111,7 +140,7 @@ def extract_features(sample, phon_dict, pc_words, prons, freqs, total_freqs):
     features['pronouns'] = \
         len([w for line in words for w in line if w in prons]) / nwords
     # lexical diversity wrt general corpus
-    features['word-entropy'] = word_entropy(words, freqs, total_freqs)
+    features['unigram-ppl'] = unigram_ppl(words, freqs, total_freqs)
     features['lzw'] = len(' '.join([w for l in words for w in l])) / \
         len(lzw.compress(' '.join([w for l in words for w in l])))
     # syntactic features
@@ -121,15 +150,18 @@ def extract_features(sample, phon_dict, pc_words, prons, freqs, total_freqs):
     sentences = [' '.join(s) for s in utils.read_sample(sample, words=True)]
     for key, val in syntactic_features.get_features(sentences).items():
         features[key] = val
-    # rhyme features
+    # flow features
     for key, val in rhyme_features.get_features(words, phon_dict).items():
         features[key] = val
+    features['assonance'] = assonance(words, phon_dict, function)
+    features['repeated-words'] = repeated_words(words)
+    print(repeated_words(words), words)
 
     return features
 
 
 def preprocess_db(dbpath, pairspath, samplespath,
-                  phon_dict, pc_words, prons, freqs, total_freqs):
+                  phon_dict, pc_words, prons, freqs, total_freqs, function):
     db = pd.read_csv(dbpath, index_col=None)
     # read target pair ids from db dump
     db_pairs = set(db['pair_id'])
@@ -168,7 +200,7 @@ def preprocess_db(dbpath, pairspath, samplespath,
 
             sample = {}
             sample['id'] = obj['id']
-            modeltype, conditional = MODELDATA[sample.get('model')]
+            modeltype, conditional = MODELDATA[obj.get('model')]
             sample['modeltype'] = modeltype
             sample['conditional'] = conditional
             sample['source'] = 'real'
@@ -181,7 +213,8 @@ def preprocess_db(dbpath, pairspath, samplespath,
                     sum(l['params']['score'] for l in obj['text']) / len(obj['text'])
             # - feature extraction
             for k, v in extract_features(
-                    obj, phon_dict, pc_words, prons, freqs, total_freqs).items():
+                    obj, phon_dict, pc_words, prons, freqs, total_freqs, function
+            ).items():
                 sample[k] = v
 
             features[sample['id']] = sample
@@ -233,10 +266,11 @@ if __name__ == '__main__':
     pc_words = loaders.load_pc_words(PATHS['pc_words'])
     prons = loaders.load_pronouns(PATHS['pronouns'])
     freqs = loaders.load_freqs(PATHS['freqs'])
+    function = loaders.load_function(PATHS['function'])
     total_freqs = sum(freqs.values())
 
     samples = preprocess_db(
         PATHS['db'], PATHS['pairs'], PATHS['samples'],
-        phon_dict, pc_words, prons, freqs, total_freqs)
+        phon_dict, pc_words, prons, freqs, total_freqs, function)
 
     pd.DataFrame.from_dict(samples).to_csv('db_features.csv')

@@ -92,21 +92,20 @@ def get_rhyme_dict(path):
     import loaders
 
     phon_dict = loaders.load_phon_dict("sources/ohhla.vocab.phon.json")
-    rhymes = []
 
     with open(path) as f:
         for line in f:
             song = json.loads(line.strip())
             for verse in song['text']:
-                for line in verse:
-                    line = [w['token'] for w in line]
-                    _, pairs = list(*zip(get_rhymes(line, phon_dict)))
-                    rhymes.extend(pairs)
-
-    return rhymes
+                verse = [[w['token'] for w in line] for line in verse]
+                for phon, pair in get_rhymes(verse, phon_dict):
+                    yield phon, pair
 
 
 if __name__ == '__main__':
     # r = load_samples()
     import collections
-    rhymes = collections.Counter(get_rhyme_dict())
+    rhymes = collections.Counter(get_rhyme_dict('../../deepflow/data/ohhla-new.sorted.train.jsonl'))
+    with open('ohhla.rhyme.counts.csv', 'w') as f:
+        for (phon, pair), count in rhymes.items():
+            f.write('\t'.join([' '.join(pair), phon, str(count)]))

@@ -7,6 +7,7 @@ import pandas as pd
 import numpy as np
 import scipy.stats
 
+import zipfile
 import loaders
 import lzw
 import syntactic_features
@@ -21,7 +22,7 @@ PATHS = {
     'pronouns': 'pronouns.txt',
     'syllabifier': 'syllable-model.tar.gz',
     'pairs': 'turing-pairs.jsonl',
-    'samples': 'samples.combined.jsonl',
+    'samples': 'samples.combined.shuffled.zip',
     'db': 'db_data.csv',
     'function': 'function.txt'
 }
@@ -40,6 +41,28 @@ MODELDATA = {
 VOWELS = 'AA AE AH AO AW AX AY EH ER EY IH IX IY OW OY UH UW UX'.split()
 
 
+def filter_reps(lists):
+    """
+    Remove consecutively repeated words from paragraph
+    """
+    output = []
+    for l in lists:
+        last = None
+        l2 = []
+        for w in l:
+            if last is None:
+                last = w
+                l2.append(w)
+            else:
+                if w == last:
+                    continue
+                else:
+                    l2.append(w)
+                    last = w
+        output.append(l2)
+    return output
+
+
 def entropy(items, base=None):
     _, counts = np.lib.arraysetops.unique(list(filter(None, items)), return_counts=True)
     return scipy.stats.entropy(counts)
@@ -56,8 +79,10 @@ def stressed_nucleus(word, phon_dict):
 
 
 def assonance_entropy(lines, phon_dict):
-    scores = [entropy(stressed_nucleus(w, phon_dict) for w in line) for line in lines]
-    return sum(scores) / len(scores)
+    """
+    Average entropy
+    """
+    return entropy(stressed_nucleus(w, phon_dict) for line in lines for w in line)
 
 
 def assonance(lines, phon_dict, blacklist):
@@ -97,13 +122,12 @@ def onset(word, phon_dict):
 
 
 def onset_entropy(lines, phon_dict):
-    scores = [entropy(onset(w, phon_dict) for w in line) for line in lines]
-    return sum(scores) / len(scores)
+    return entropy(onset(w, phon_dict) for line in lines for w in line)
 
 
 def alliteration_score(lines, phon_dict):
     alliterations = 0
-    for line in lines:
+    for line in filter_reps(lines):
         for a, b in zip(line, line[1:]):
             onset_a, onset_b = onset(a, phon_dict), onset(b, phon_dict)
             if onset_a is not None and onset_a == onset_b:
@@ -129,8 +153,7 @@ def extract_features(sample, phon_dict, pc_words, prons, freqs, total_freqs, fun
     # alliteration score
     features['alliteration'] = alliteration_score(words, phon_dict)
     # repetitiveness
-    features['stressed-vowel-repetitiveness'] = assonance_entropy(
-        words, phon_dict)
+    features['stressed-vowel-repetitiveness'] = assonance_entropy(words, phon_dict)
     features['word-onset-repetitiveness'] = onset_entropy(words, phon_dict)
     features['word-repetitiveness'] = vocab_entropy(words)
     features['syllable-repetitiveness'] = vocab_entropy(sylls)
@@ -185,39 +208,40 @@ def preprocess_db(dbpath, pairspath, samplespath,
     print("processing {} pairs".format(len(db_pairs)))
 
     features = {}
-    with open(samplespath) as f:
-        for line in f:
-            obj = json.loads(line.strip())
-            if obj['id'] not in sample2pair:
-                continue
-            if obj['id'] in features:
-                print("found duplicate sample with id", obj['id'])
+    with zipfile.ZipFile(samplespath) as z:
+        with z.open(z.filelist[0].filename) as f:
+            for line in f:
+                obj = json.loads(line.strip())
+                if obj['id'] not in sample2pair:
+                    continue
+                if obj['id'] in features:
+                    print("found duplicate sample with id", obj['id'])
 
-            if features and len(features) % 100 == 0:
-                print(".", end="", flush=True)
-            if features and len(features) % 1000 == 0:
-                print(len(features), end="", flush=True)
+                if features and len(features) % 100 == 0:
+                    print(".", end="", flush=True)
+                if features and len(features) % 1000 == 0:
+                    print(len(features), end="", flush=True)
 
-            sample = {}
-            sample['id'] = obj['id']
-            modeltype, conditional = MODELDATA[obj.get('model')]
-            sample['modeltype'] = modeltype
-            sample['conditional'] = conditional
-            sample['source'] = 'real'
-            # (generation params)
-            if 'params' in obj:  # add generation metadata
-                sample['source'] = 'fake'
-                sample['tau'] = obj['params']['tau']
-                sample['tries'] = obj['params']['tries']
-                sample['model_ppl'] = \
-                    sum(l['params']['score'] for l in obj['text']) / len(obj['text'])
-            # - feature extraction
-            for k, v in extract_features(
-                    obj, phon_dict, pc_words, prons, freqs, total_freqs, function
-            ).items():
-                sample[k] = v
+                sample = {}
+                sample['id'] = obj['id']
+                modeltype, conditional = MODELDATA[obj.get('model')]
+                sample['modeltype'] = modeltype
+                sample['conditional'] = conditional
+                sample['source'] = 'real'
+                # (generation params)
+                if 'params' in obj:  # add generation metadata
+                    sample['source'] = 'fake'
+                    sample['tau'] = obj['params']['tau']
+                    sample['tries'] = obj['params']['tries']
+                    sample['model_ppl'] = \
+                        sum(l['params']['score'] for l in obj['text']) / len(obj['text'])
+                # - feature extraction
+                for k, v in extract_features(
+                        obj, phon_dict, pc_words, prons, freqs, total_freqs, function
+                ).items():
+                    sample[k] = v
 
-            features[sample['id']] = sample
+                features[sample['id']] = sample
 
     db_keys = 'test_id score iteration level type pair_id'.split() + \
               'true_answer user_answer correct time'.split()

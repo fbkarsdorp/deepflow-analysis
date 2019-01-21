@@ -178,7 +178,6 @@ def extract_features(sample, phon_dict, pc_words, prons, freqs, total_freqs, fun
         features[key] = val
     features['assonance'] = assonance(words, phon_dict, function)
     features['repeated-words'] = repeated_words(words)
-    print(repeated_words(words), words)
 
     return features
 

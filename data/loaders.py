@@ -5,6 +5,10 @@ import syntactic_features
 
 
 # LOADERS
+def load_function(path):
+    with open(path) as f:
+        return set(w.strip() for w in f)
+    
 def load_phon_dict(path):
     "phon_dict_path"
     with open(path) as f:

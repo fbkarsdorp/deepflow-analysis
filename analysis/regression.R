@@ -7,12 +7,14 @@ library(dplyr)
 library(standardize)
 library(cowplot)
 library(projpred)
+library(knitr)
+library(kableExtra)
 
 df <- read.csv("../data/db_data.csv")
 df <- df[df$user_answer != 0,]
 df$user_answer <- 2 - df$user_answer
 df$true_answer <- 2 - df$true_answer
-# remove all games which were early stopped
+# only include full games
 df <- df[df$test_id %in% names(table(df$test_id))[table(df$test_id) >= 10],]
 df$test_id <- as.factor(df$test_id)
 df$correct <- abs(1 - as.integer(df$correct))
@@ -275,66 +277,110 @@ cowplot::save_plot("../images/perceived-model-interactions.pdf", plots, dpi=300,
 # Add abs(difference between features in choose case)
 # Find out if there's some transfer learning going on between game types.
 
-df <- read.csv("../data/db_features.csv")
-df <- df[df$user_answer != 0,]
+df <- read.csv("../data/db_features-new.csv")
+df <- df[df$user_answer != 0,] # remove unanswered
 df$user_answer <- 2 - df$user_answer
 df$true_answer <- 2 - df$true_answer
 df$perceived <- df$user_answer
-## df = df[df$trial_id <= 11,] # 10 rounds + sudden death
-df[df$type == "choose", "perceived"] = 2 - as.integer(
-    factor(df[df$type == "choose", "correct"]))
+df[df$type == "choose" & df$source == "fake" & df$correct == "True", "perceived"] = 0
+df[df$type == "choose" & df$source == "real" & df$correct == "True", "perceived"] = 1
+df[df$type == "choose" & df$source == "fake" & df$correct == "False", "perceived"] = 1
+df[df$type == "choose" & df$source == "real" & df$correct == "False", "perceived"] = 0
 df$trial_id = df$level * 5 + df$iteration
+df = df[df$trial_id <= 11,] # 10 rounds + sudden death
+df$perceived = factor(df$perceived, levels=c(0, 1), labels=c("generated", "authentic"))
 # remove all games which were early stopped
 df <- df[df$test_id %in% names(table(df$test_id))[table(df$test_id) >= 10],]
 df$test_id <- as.factor(df$test_id)
 df$time = df$time / 1000 # convert to seconds
 df$time[df$time > 15] = 15
-df <- df[df$type == "forreal" | (df$type == "choose" & df$source == "fake"),]
-df$correct <- abs(1 - as.integer(df$correct))
-scores = df %>% group_by(test_id) %>% summarise(score = sum(correct))
-experts = pull(scores[scores$score >= 15,], "test_id")
-df$expert = 0
-df[df$test_id %in% experts, "expert"] = 1
+
+## # choose items are represented by two rows, one for the generated fragment
+## # and one for the authentic fragment. We only need to include one of them in 
+## # the analysis, so we remove all real rows in choose rows.
+## df <- df[df$type == "forreal" | (df$type == "choose" & df$source == "real"),]
+
+## df$correct <- abs(1 - as.integer(df$correct))
+## scores = df %>% group_by(test_id) %>% summarise(score = sum(correct))
+## experts = pull(scores[scores$score >= 15,], "test_id")
+## df$expert = 0
+## df[df$test_id %in% experts, "expert"] = 1
 
 
-predictors = c("word.entropy",                  # compression
-               "mean_depth",                    # syntax
-               "mean_span",                     # syntax
-               "nlines",                        # length
-               "pc.words",                      # content
-               "pronouns",                      # content
-               "rhyme_density",                 # rhyme
-               "stressed.vowel.repetitiveness", # sounds
-               "word.length.syllables"          # complexity
-               )
+predictors = c(
+               "alliteration",                   # sounds
+               "assonance",                      # sounds
+               "rhyme_density",                  # sounds
+               ## "stressed.vowel.repetitiveness",  # sounds --|
+               ## "word.onset.repetitiveness",      # sounds --|
+               ## "max_span",                       # sentence complexity ~~
+               "mean_span",                      # sentence complexity ~~
+               ## "max_depth",                      # sentence complexity --|
+               "mean_depth",                     # sentence complexity --|
+               ## "num_spans",                      # sentence complexity --|
+               ## "nchars",                         # length --|
+               ## "nlines",                         # length --|
+               ## "nwords",                         # length --|
+               "pc.words",                       # contents
+               ## "pronouns",                       # contents
+               ## "lzw",                            # repetition
+               "repeated.words",                 # repetition
+               ## "syllable.repetitiveness",        # repetition --|
+               "word.repetitiveness",             # repetition --|
+               ## "unigram.ppl",                    # repetition
+               ## "word.length",                    # word complexity --|
+               "word.length.syllables"           # word complexity --|
+)
+
+summarizer <- function(col) {
+    paste0(
+        "$\\mu=",
+        format(mean(col), digits=2), 
+        "$ ($\\sigma=", 
+        format(sd(col), digits=2),
+        "$)")
+}
+
+df[, c("source", "modeltype", predictors)] %>% group_by(source, modeltype) %>% 
+    summarise_all(funs(summarizer)
+    ) %>%
+    select(c("source", "modeltype", predictors)) %>% t() %>%
+    kable("latex", align="r", escape = F, booktabs = T, linesep = "")
 
 
 formula <- as.formula(paste("source ~ (", paste(predictors, collapse = "+"), ")"))
-regr = standardize(formula, data=df, family = "binomial")
+regr = standardize(formula, data=df, family = "binomial", scale=0.5)
 m_objective = brm(regr$formula, data=regr$data, family = "bernoulli")
+summary(m_objective)
+
+b <- summary(m_objective)$fixed[, c(1, 3, 4)]
+round(exp(b), 1)
 
 set_theme(base=theme_sjplot(), geom.label.size=5, axis.textsize = 1.1)
 
-summary(m_objective)
 p_objective <- plot_model(m_objective, show.values = TRUE,
            title = "Objective feature importance", bpe = "mean",
            prob.inner = .5,
            value.size=5,
-           prob.outer = .95
-           ) + ylim(c(0.5, 4.5))
+           prob.outer = .95,
+           transform = NULL
+           )
 
 formula = as.formula(paste("perceived ~ (", paste(predictors, collapse = "+"), ") + (1|test_id)"))
-regr <- standardize(formula, data=df, family = "binomial")
+regr <- standardize(formula, data=df, family = "binomial", scale = 0.5)
 m_subjective = brm(regr$formula, data=regr$data, family = "bernoulli")
-
 summary(m_subjective)
+
+b <- summary(m_subjective)$fixed[, c(1, 3, 4)]
+round(exp(b), 1)
 
 p_subjective <- plot_model(m_subjective, show.values = TRUE,
            title = "Subjective feature importance", bpe = "mean",
            prob.inner = .5,
            prob.outer = .95,
            value.size=5,
-           ) + ylim(c(0.7, 1.5))
+           transform = NULL
+           )
 
 plots = cowplot::plot_grid(p_objective, p_subjective, labels = c("a)", "b)"), align="h")
 cowplot::save_plot("../images/feature-importance.pdf", plots, dpi=300, base_width=15,

@@ -92,21 +92,50 @@ plot_model(mod, type="pred", terms=c("time", "type"))
 ## incorporate this into the model as an interaction effect)
 df_gen <- df[((df$true_answer == 0) & (df$type == "forreal")) | df$type == "choose",]
 
-# test for differences between language models:
-regr = standardize(correct ~ genlevel + (1|test_id), data=df_gen, family = 'binomial', scale=1)
-m_correct <- brm(correct ~ genlevel + (1|test_id), data=df_gen, family='bernoulli')
-summary(m_correct)
-plot(m_correct)
+# test for differences between language models. First for forreal questions
+m_correct_forreal <- brm(correct ~ genlevel + (1|test_id),
+                         data=df_gen[df_gen$type == "forreal",],
+                         family='bernoulli')
 
-coda = posterior_samples(m_correct)
+summary(m_correct_forreal)
+plot(m_correct_forreal)
+
+coda = posterior_samples(m_correct_forreal)
 a = data.frame(char = coda[,1], hybrid=coda[,1] + coda[,2], syl=coda[,1] + coda[,3])
 a = apply(a, 2, function(x) 1 / (1 + exp(-x)))
 tn = t(as.matrix(apply(a, 2, function(x) quantile(x, probs=c(.5, .025, .975)))))
 tn = round(tn * 100, 1)
+tn
 
-# include differences between game types
-regr = standardize(correct ~ genlevel * type + (1|test_id), data=df_gen, family = 'binomial', scale=1)
-m_correct_t = brm(regr$formula, data=regr$data, family = "bernoulli")
+p_genlevel_forreal = marginal_effects(m_correct_forreal, "genlevel")
+
+# Next, test choose questions
+m_correct_choose <- brm(correct ~ genlevel + (1|test_id),
+                         data=df_gen[df_gen$type == "choose",],
+                        family='bernoulli')
+
+summary(m_correct_choose)
+plot(m_correct_choose)
+
+coda = posterior_samples(m_correct_choose)
+a = data.frame(char = coda[,1], hybrid=coda[,1] + coda[,2], syl=coda[,1] + coda[,3])
+a = apply(a, 2, function(x) 1 / (1 + exp(-x)))
+tn = t(as.matrix(apply(a, 2, function(x) quantile(x, probs=c(.5, .025, .975)))))
+tn = round(tn * 100, 1)
+tn
+
+p_genlevel_choose = marginal_effects(m_correct_choose, "genlevel")
+
+plots = cowplot::plot_grid(plot(p_genlevel_forreal)[[1]] + ylim(c(0.45, 0.7)),
+                           plot(p_genlevel_choose)[[1]] + ylim(c(0.45, 0.7)),
+                           labels = c("a)", "b)"), align="h")
+cowplot::save_plot("../images/genlevel-marginals.pdf", plots, dpi=300, base_width=10,
+                   base_height=5, base_aspect_ratio = 1.3)
+
+## # include differences between game types
+regr = standardize(correct ~ genlevel * type + (1|test_id), data=df_gen,
+                   family = 'binomial', scale=1)
+m_correct_t = brm(correct ~ genlevel * type + (1|test_id), data=df_gen, family = "bernoulli")
 summary(m_correct_t)
 
 coda = posterior_samples(m_correct_t)
@@ -123,15 +152,44 @@ tn = t(as.matrix(apply(a, 2, function(x) quantile(x, probs=c(.5, .025, .975)))))
 tn = round(tn * 100, 1)
 tn
 
-p_genlevel = marginal_effects(m_correct_t, "genlevel:type")
-
 # next we can do the same with conditional (we might also combine them in a single model)
 
-regr = standardize(correct ~ conditional + (1|test_id), data=df_gen, family = 'binomial', scale=1)
-m_correct_c = brm(regr$formula, data=regr$data, family = 'bernoulli')
-summary(m_correct_c)
+m_correct_c_forreal = brm(correct ~ conditional + (1|test_id),
+                  data=df_gen[df_gen$type == "forreal",], family = 'bernoulli')
+summary(m_correct_c_forreal)
 
-exp(summary(m_correct_c)$fixed[2, c(1, 3, 4)])
+coda = posterior_samples(m_correct_c_forreal)
+head(colnames(coda), 10)
+
+a = data.frame(unconditional = coda[,1], conditional=coda[,1] + coda[,2])
+a = apply(a, 2, function(x) 1 / (1 + exp(-x)))
+tn = t(as.matrix(apply(a, 2, function(x) quantile(x, probs=c(.5, .025, .975)))))
+tn = round(tn * 100, 1)
+tn
+
+p_conditional_forreal = marginal_effects(m_correct_c_forreal, "conditional")
+
+m_correct_c_choose = brm(correct ~ conditional + (1|test_id),
+                  data=df_gen[df_gen$type == "choose",], family = 'bernoulli')
+summary(m_correct_c_choose)
+
+coda = posterior_samples(m_correct_c_choose)
+head(colnames(coda), 10)
+
+a = data.frame(unconditional = coda[,1], conditional=coda[,1] + coda[,2])
+a = apply(a, 2, function(x) 1 / (1 + exp(-x)))
+tn = t(as.matrix(apply(a, 2, function(x) quantile(x, probs=c(.5, .025, .975)))))
+tn = round(tn * 100, 1)
+tn
+
+p_conditional_choose = marginal_effects(m_correct_c_choose, "conditional")
+
+plots = cowplot::plot_grid(plot(p_conditional_forreal)[[1]] + ylim(c(0.48, 0.68)),
+                           plot(p_conditional_choose)[[1]] + ylim(c(0.48, 0.68)),
+                           labels = c("a)", "b)"), align="h")
+cowplot::save_plot("../images/conditioned-marginals.pdf", plots, dpi=300, base_width=10,
+                   base_height=5, base_aspect_ratio = 1.3)
+
 
 regr = standardize(correct ~ conditional * type + (1|test_id), data=df_gen, family = 'binomial', scale=1)
 m_correct_cond = brm(regr$formula, data=regr$data, family = 'bernoulli')

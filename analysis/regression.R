@@ -17,6 +17,13 @@ marginal_effects_table <- function(model, term) {
     data[, c(conditions, c("estimate__", "lower__", "upper__"))]
 }
 
+set_theme(base=theme_sjplot(),
+          title.size=2,
+          axis.textsize = 1.3,
+          axis.title.size = 1.8,
+          legend.title.size = 1.5,
+          legend.item.size = 1,
+          legend.size = 1.5)
 
 df <- read.csv("../data/db_data.csv")
 df <- df[df$user_answer != 0,]
@@ -32,6 +39,7 @@ df$trial_id = df$trial_id / 11 # rescale for easier interpretation of coefficien
 df$time = df$time / 1000 # convert to seconds
 df$time[df$time > 15] = 15
 
+df <- df[df$type == "forreal",] # remove choose cases for now
 
 # TODO: clean users with weird timings
 # TODO: check for really fast answers
@@ -61,7 +69,6 @@ tn
 
 m_type = brm(correct ~ type + (1|test_id), data=df,
              family='bernoulli')
-
 summary(m_type)
 
 coda = posterior_samples(m_type)
@@ -82,9 +89,19 @@ m_type_trial = brm(regr$formula, regr$data, family = 'bernoulli')
 summary(m_type_trial)
 
 ## Does the trial effect depend on whether real or fake was the correct answer?
-regr = standardize(correct ~ trial_id * true_answer + (1|test_id), data=df[df$type=="forreal",], family="binomial")
-m_trial_true = brm(regr$formula, data=regr$data, family = "bernoulli")
+regr = standardize(correct ~ trial_id * true_answer + (1|test_id), data=df, family="binomial")
+m_trial_true = brm(regr$formula, data=regr$data, family = "bernoulli",
+                   control=list(max_treedepth=20))
 summary(m_trial_true)
+
+g = plot(marginal_effects(m_trial_true, "trial_id:true_answer"), plots=F)[[1]] +
+    scale_colour_brewer("True answer", palette="Set1", labels=c("Authentic", "Generated")) +
+    scale_fill_brewer("True answer", palette="Set1", labels=c("Authentic", "Generated")) +
+    theme(legend.box.background = element_rect(fill = "transparent"),
+          legend.background = element_rect(fill = "transparent"))
+
+ggsave("../images/trial_effect.png", g, dpi=300, bg="transparent")
+
 
 # is the time participants took advantageous?
 regr = standardize(correct ~ time * type + (1|test_id), data=df, family = 'binomial')
@@ -101,10 +118,7 @@ plot_model(mod, type="pred", terms=c("time", "type"))
 df_gen <- df[((df$true_answer == 0) & (df$type == "forreal")) | df$type == "choose",]
 
 # test for differences between language models. First for forreal questions
-m_correct_forreal <- brm(correct ~ genlevel + (1|test_id),
-                         data=df_gen[df_gen$type == "forreal",],
-                         family='bernoulli')
-
+m_correct_forreal <- brm(correct ~ genlevel + (1|test_id), data=df, family='bernoulli')
 summary(m_correct_forreal)
 plot(m_correct_forreal)
 
@@ -207,17 +221,17 @@ cowplot::save_plot("../images/cond-gen-interactions.pdf", plots, dpi=300, base_w
 
 # The perceived authenticity is equal to the user answer in forreal questions
 df$perceived = df$user_answer
-# The perceived authenticity in choose questions is equal to whether the answer was correct or not.
-df[df$type == "choose", "perceived"] = 1 - df[df$type == "choose", "correct"]
+# we should only consider bias in forreal questions, as it doesn't make much 
+# make much sense for choose questions.
 
-# there is a slight bias towards real:
-prop.table(table(df$perceived))
+# there is not a clear bias towards real or generated:
+prop.table(table(df[df$type == "forreal",]$perceived))
 
 ## but this appears only to be the case in choose questions.
 aggregate(perceived ~ type, df, mean)
 
 ## Is there a bias towards fake or real
-p_baseline <- brm(perceived ~ 1 + (1|test_id), data=df,
+p_baseline <- brm(perceived ~ 1 + (1|test_id), data=df[df$type == "forreal",],
                   control=list(adapt_delta=0.95),
                   family="bernoulli")
 summary(p_baseline)
@@ -226,95 +240,13 @@ plot(p_baseline)
 b <- summary(p_baseline)$fixed[1, c(1, 3, 4)]
 round(exp(b), 1)
 
-coda = posterior_samples(p_baseline)
-a = data.frame(bias = coda[,1])
-a = apply(a, 2, function(x) 1 / (1 + exp(-x)))
-tn = t(as.matrix(apply(a, 2, function(x) quantile(x, probs=c(.5, .025, .975)))))
-tn = round(tn * 100, 1)
-tn
-
-# measure bias for different game types
-p_basetype <- brm(perceived ~ type + (1|test_id), data=df,
-                  control=list(adapt_delta=0.95),
-                  family="bernoulli")
-summary(p_basetype)
-plot(p_basetype)
-
-coda = posterior_samples(p_basetype)
-head(colnames(coda))
-
-a = data.frame(bias_choose = coda[,1],
-               bias_forreal = coda[,1] + coda[,2])
-a = apply(a, 2, function(x) 1 / (1 + exp(-x)))
-tn = t(as.matrix(apply(a, 2, function(x) quantile(x, probs=c(.5, .025, .975)))))
-tn = round(tn * 100, 1)
-tn
-
 # as the game progresses, does the bias change?
-regr = standardize(perceived ~ trial_id + (1|test_id), data=df, family = 'binomial')
+regr = standardize(perceived ~ trial_id + (1|test_id),
+                   data=df[df$type == "forreal",], family = 'binomial')
 mod = glmer(regr$formula, data=regr$data, family="binomial")
 summary(mod)
 Anova(mod) # it seems so, yes
 plot_model(mod, type="pred", terms=c("trial_id"))
-
-# We previously saw an interesting effect of time per question on the objective
-# authenticity. Does that also affect the bias towards fake or real?
-regr = standardize(perceived ~ time * true_answer + (1|test_id),
-                   data=df[df$type=="forreal",], family = 'binomial')
-mod = glmer(regr$formula, data=regr$data, family="binomial")
-summary(mod)
-Anova(mod) # yes, it does, though especially for real examples.
-           # QUESTION: what examples are we dealing with here?
-plot_model(mod, type="pred", terms=c("time", "true_answer"))
-
-
-# include differences between game types
-df_gen <- df[((df$true_answer == 0) & (df$type == "forreal")) | df$type == "choose",]
-regr = standardize(perceived ~ genlevel * type + (1|test_id), data=df_gen, family = 'binomial', scale=1)
-p_correct_t = brm(regr$formula, data=regr$data,
-                  control=list(adapt_delta=0.95),
-                  family = "bernoulli")
-summary(p_correct_t)
-
-coda = posterior_samples(p_correct_t)
-head(colnames(coda), 10)
-
-a = data.frame(syl_forreal = coda[,1] - coda[,4],
-               syl_choose = coda[,1] + coda[,4],
-               char_forreal = coda[,1] + coda[,2] - coda[,4] - coda[,5],
-               char_choose = coda[,1] + coda[,2] + coda[,4] + coda[,5],
-               hybrid_forreal = coda[,1] + coda[,3] - coda[,4] - coda[,6],
-               hybrid_choose = coda[,1] + coda[,3] + coda[,4] + coda[,6])
-a = apply(a, 2, function(x) 1 / (1 + exp(-x)))
-tn = t(as.matrix(apply(a, 2, function(x) quantile(x, probs=c(.5, .025, .975)))))
-tn = round(tn * 100, 1)
-tn
-
-p_p_gen = marginal_effects(p_correct_t, "genlevel:type")
-
-regr = standardize(perceived ~ conditional * type + (1|test_id), data=df_gen, family = 'binomial', scale=1)
-p_correct_cond = brm(regr$formula, data=regr$data,
-                     control=list(adapt_delta=0.95),
-                     family = 'bernoulli')
-summary(p_correct_cond)
-
-coda = posterior_samples(p_correct_cond)
-head(colnames(coda), 10)
-
-a = data.frame(uc_fr = coda[,1],
-               uc_ch = coda[,1] + coda[,3] - coda[,2],
-               co_fr = coda[,1] - coda[,3] + coda[,2] - coda[,4],
-               co_ch = coda[,1] + coda[,2] + coda[,3] + coda[,4])
-a = apply(a, 2, function(x) 1 / (1 + exp(-x)))
-tn = t(as.matrix(apply(a, 2, function(x) quantile(x, probs=c(.5, .025, .975)))))
-tn = round(tn * 100, 1)
-tn
-
-p_p_cond = marginal_effects(p_correct_cond, "conditional:type")
-
-plots = cowplot::plot_grid(plot(p_p_gen)[[1]], plot(p_p_cond)[[1]], labels = c("a)", "b)"), align="h")
-cowplot::save_plot("../images/perceived-model-interactions.pdf", plots, dpi=300, base_width=10,
-                   base_height=5, base_aspect_ratio = 1.3)
 
 
 ##########################################################################################
@@ -395,26 +327,26 @@ df[, c("source", "modeltype", predictors)] %>% group_by(source, modeltype) %>%
 
 
 formula <- as.formula(paste("source ~ (", paste(predictors, collapse = "+"), ")"))
-regr = standardize(formula, data=df, family = "binomial", scale=0.5)
+regr = standardize(formula, data=df[df$type == "forreal",], family = "binomial", scale=0.5)
 m_objective = brm(regr$formula, data=regr$data, family = "bernoulli")
 summary(m_objective)
 
 b <- summary(m_objective)$fixed[, c(1, 3, 4)]
 round(exp(b), 1)
 
-set_theme(base=theme_sjplot(), geom.label.size=5, axis.textsize = 1.1)
-
 p_objective <- plot_model(m_objective, show.values = TRUE,
            title = "Objective feature importance", bpe = "mean",
            prob.inner = .5,
-           value.size=5,
+           value.size=8,
+           label.size=8,
            prob.outer = .95,
            transform = NULL
            )
 
 formula = as.formula(paste("perceived ~ (", paste(predictors, collapse = "+"), ") + (1|test_id)"))
-regr <- standardize(formula, data=df, family = "binomial", scale = 0.5)
-m_subjective = brm(regr$formula, data=regr$data, family = "bernoulli")
+regr <- standardize(formula, data=df[df$type == "forreal",], family = "binomial", scale = 0.5)
+m_subjective = brm(regr$formula, data=regr$data, family = "bernoulli",
+                   control=list(adapt_delta=0.95))
 summary(m_subjective)
 
 b <- summary(m_subjective)$fixed[, c(1, 3, 4)]
@@ -424,13 +356,16 @@ p_subjective <- plot_model(m_subjective, show.values = TRUE,
            title = "Subjective feature importance", bpe = "mean",
            prob.inner = .5,
            prob.outer = .95,
-           value.size=5,
-           transform = NULL
-           )
+           value.size=8,
+           transform = NULL,
+           geom.label.size = 0
+           ) + ylim(c(-0.75, 0.75)) + theme(axis.text.y.left = element_text(size=0))
 
-plots = cowplot::plot_grid(p_objective, p_subjective, labels = c("a)", "b)"), align="h")
-cowplot::save_plot("../images/feature-importance.pdf", plots, dpi=300, base_width=15,
-                   base_height=8)
+plots = cowplot::plot_grid(p_objective, NULL, p_subjective, nrow=1,
+                           align="h", rel_widths = c(1.45, 0.1, 1))
+cowplot::save_plot("../images/feature-importance.png", plots, dpi=300, base_width=15,
+                   base_height=8, bg = "transparent")
+
 
 
 formula = as.formula(paste("perceived ~ (", paste(predictors, collapse = "+"), ") + (1|test_id)"))

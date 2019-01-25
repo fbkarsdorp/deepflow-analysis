@@ -191,13 +191,24 @@ cowplot::save_plot("../images/model-interactions.pdf", plots, dpi=300, base_widt
 # Next, investigate interactions between genlevel and conditional
 # First, forreal:
 regr = standardize(correct ~ genlevel * conditional + (1|test_id),
-                   data=df_gen[df_gen$type == "forreal",], family = 'binomial', scale = 1)
-m_correct_c_g_forreal = brm(regr$formula, data=regr$data, family = 'bernoulli')
+                   data=df, family = 'binomial', scale = 1)
+m_correct_c_g_forreal = brm(regr$formula, data=regr$data, family = 'bernoulli',
+                            control=list(max_treedepth=20))
 summary(m_correct_c_g_forreal)
 
 m_correct_genlevel_cond_forreal_eff = marginal_effects(
     m_correct_c_g_forreal, "genlevel:conditional")
 marginal_effects_table(m_correct_c_g_forreal, "genlevel:conditional")
+
+g = plot(marginal_effects(m_correct_c_g_forreal, "genlevel:conditional"), plots=F)[[1]] +
+    scale_colour_brewer("Conditioning", palette="Set1", labels=c("yes", "no")) +
+    scale_fill_brewer("Conditioning", palette="Set1", labels=c("yes", "no")) +
+    ylim(c(0.45, 0.7)) + labs(y="Accuracy", x="Generation Model") +
+    theme(legend.box.background = element_rect(fill = "transparent"),
+          legend.background = element_rect(fill = "transparent"))
+
+ggsave("../images/genlevel-conditioning.png", g, dpi=300, bg="transparent")
+
 
 # Next, choose
 regr = standardize(correct ~ conditional * genlevel + (1|test_id),
@@ -225,15 +236,11 @@ df$perceived = df$user_answer
 # make much sense for choose questions.
 
 # there is not a clear bias towards real or generated:
-prop.table(table(df[df$type == "forreal",]$perceived))
-
-## but this appears only to be the case in choose questions.
-aggregate(perceived ~ type, df, mean)
+prop.table(table(df$perceived))
 
 ## Is there a bias towards fake or real
-p_baseline <- brm(perceived ~ 1 + (1|test_id), data=df[df$type == "forreal",],
-                  control=list(adapt_delta=0.95),
-                  family="bernoulli")
+p_baseline <- brm(perceived ~ 1 + (1|test_id), data=df,
+                  control=list(adapt_delta=0.95), family="bernoulli")
 summary(p_baseline)
 plot(p_baseline)
 # compute the odds
@@ -241,13 +248,17 @@ b <- summary(p_baseline)$fixed[1, c(1, 3, 4)]
 round(exp(b), 1)
 
 # as the game progresses, does the bias change?
-regr = standardize(perceived ~ trial_id + (1|test_id),
-                   data=df[df$type == "forreal",], family = 'binomial')
-mod = glmer(regr$formula, data=regr$data, family="binomial")
-summary(mod)
-Anova(mod) # it seems so, yes
-plot_model(mod, type="pred", terms=c("trial_id"))
+regr = standardize(perceived ~ trial_id + (1|test_id), data=df, family = 'binomial')
+m_trial_bias = brm(regr$formula, data=regr$data, family="bernoulli",
+                   control=list(adapt_delta=0.95))
+summary(m_trial_bias)
 
+g = plot(marginal_effects(m_trial_bias, "trial_id"), plots=F)[[1]] +
+    labs(y="Probability authentic perception", x="Trial") + 
+    theme(legend.box.background = element_rect(fill = "transparent"),
+          legend.background = element_rect(fill = "transparent"))
+
+ggsave("../images/trial_bias.png", g, dpi=300, bg="transparent")
 
 ##########################################################################################
 ## Linguistic Feature analysis
@@ -366,19 +377,3 @@ plots = cowplot::plot_grid(p_objective, NULL, p_subjective, nrow=1,
 cowplot::save_plot("../images/feature-importance.png", plots, dpi=300, base_width=15,
                    base_height=8, bg = "transparent")
 
-
-
-formula = as.formula(paste("perceived ~ (", paste(predictors, collapse = "+"), ") + (1|test_id)"))
-regr <- standardize(formula, data=df[df$expert == 1, ], family = "binomial")
-m_expert = brm(regr$formula, data=regr$data,
-               control=list(adapt_delta=0.95),
-               family = "bernoulli")
-
-summary(m_expert)
-
-p_expert <- plot_model(m_expert, show.values = TRUE,
-           title = "Expert feature importance", bpe = "mean",
-           prob.inner = .5,
-           prob.outer = .95,
-           value.size=5)
-p_expert

@@ -94,11 +94,15 @@ m_trial_true = brm(regr$formula, data=regr$data, family = "bernoulli",
                    control=list(max_treedepth=20))
 summary(m_trial_true)
 
-g = plot(marginal_effects(m_trial_true, "trial_id:true_answer"), plots=F)[[1]] +
-    scale_colour_brewer("True answer", palette="Set1", labels=c("Authentic", "Generated")) +
-    scale_fill_brewer("True answer", palette="Set1", labels=c("Authentic", "Generated")) +
+palette <- "Dark2"
+g <- plot(marginal_effects(m_trial_true, "trial_id:true_answer"), plots=F)[[1]] +
+    scale_colour_brewer("True answer", palette=palette, labels=c("Authentic", "Generated")) +
+    scale_fill_brewer("True answer", palette=palette, labels=c("Authentic", "Generated")) +
     theme(legend.box.background = element_rect(fill = "transparent"),
-          legend.background = element_rect(fill = "transparent"))
+          legend.position="bottom",
+          legend.background = element_rect(fill = "transparent"), text=element_text(size=14)
+    ) + labs(x="Trial id", y="")
+
 
 ggsave("../images/trial_effect.png", g, dpi=300, bg="transparent")
 
@@ -334,14 +338,32 @@ summary(m_objective)
 b <- summary(m_objective)$fixed[, c(1, 3, 4)]
 round(exp(b), 1)
 
+
+pred.order <- c(9, 3, 1, 2, 8, 6, 7, 4, 5)
+pred.names <- c(
+    "Mean Depth",
+    "Mean Span",
+    "Word Repetition",
+    "Non-PC Vocabulary",
+    "Lexical Diversity",
+    "Assonance",
+    "Alliteration",
+    "Rhyme Density",
+    "Word Length"
+)
+
+value.size<-8
 p_objective <- plot_model(m_objective, show.values = TRUE,
            title = "Objective feature importance", bpe = "mean",
            prob.inner = .5,
-           value.size=8,
-           label.size=8,
            prob.outer = .95,
-           transform = NULL
-           )
+           value.size=value.size,
+           transform = NULL,
+           order.terms = pred.order,
+           axis.labels=pred.names,
+           theme="theme_bw"
+           ) + ylim(c(-1.25, 3)) + theme(text=element_text(size=14))
+
 
 formula = as.formula(paste("perceived ~ (", paste(predictors, collapse = "+"), ") + (1|test_id)"))
 regr <- standardize(formula, data=df[df$type == "forreal",], family = "binomial", scale = 0.5)
@@ -356,10 +378,12 @@ p_subjective <- plot_model(m_subjective, show.values = TRUE,
            title = "Subjective feature importance", bpe = "mean",
            prob.inner = .5,
            prob.outer = .95,
-           value.size=8,
+           value.size=value.size,
            transform = NULL,
+           order.terms = pred.order,
            geom.label.size = 0
-           ) + ylim(c(-0.75, 0.75)) + theme(axis.text.y.left = element_text(size=0))
+           ) + ylim(c(-0.25, 0.75)) + theme(axis.text.y.left = element_text(size=0), text=element_text(size=14))
+
 
 plots = cowplot::plot_grid(p_objective, NULL, p_subjective, nrow=1,
                            align="h", rel_widths = c(1.45, 0.1, 1))

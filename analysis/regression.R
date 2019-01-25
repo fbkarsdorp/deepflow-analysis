@@ -125,6 +125,13 @@ plot(m_correct_forreal)
 p_genlevel_forreal = marginal_effects(m_correct_forreal, "genlevel")
 marginal_effects_table(m_correct_forreal, "genlevel")
 
+g = plot(marginal_effects(m_correct_c_g_forreal, "genlevel"), plots=F)[[1]] +
+    labs(y="Accuracy", x="Generation Model") + ylim(c(0.45, 0.7)) + 
+    theme(legend.box.background = element_rect(fill = "transparent"),
+          legend.background = element_rect(fill = "transparent"))
+
+ggsave("../images/genlevel.png", g, dpi=300, bg="transparent")
+
 # Next, test choose questions
 m_correct_choose <- brm(correct ~ genlevel + (1|test_id),
                          data=df_gen[df_gen$type == "choose",],
@@ -252,6 +259,9 @@ regr = standardize(perceived ~ trial_id + (1|test_id), data=df, family = 'binomi
 m_trial_bias = brm(regr$formula, data=regr$data, family="bernoulli",
                    control=list(adapt_delta=0.95))
 summary(m_trial_bias)
+
+b <- summary(m_trial_bias)$fixed[, c(1, 3, 4)]
+round(exp(b), 1)
 
 g = plot(marginal_effects(m_trial_bias, "trial_id"), plots=F)[[1]] +
     labs(y="Probability authentic perception", x="Trial") + 

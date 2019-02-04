@@ -67,26 +67,10 @@ tn = t(as.matrix(apply(a, 2, function(x) quantile(x, probs=c(.5, .025, .975)))))
 tn = round(tn * 100, 2)
 tn
 
-m_type = brm(correct ~ type + (1|test_id), data=df,
-             family='bernoulli')
-summary(m_type)
-
-coda = posterior_samples(m_type)
-a = data.frame(choose = coda[,1], forreal = coda[,1] + coda[,2])
-a = apply(a, 2, function(x) 1 / (1 + exp(-x)))
-tn = t(as.matrix(apply(a, 2, function(x) quantile(x, probs=c(.5, .025, .975)))))
-tn = round(tn * 100, 1)
-tn
-
 regr = standardize(correct ~ trial_id + (1|test_id), data=df, family="binomial", scale=1.0)
 m_trial = brm(regr$formula, regr$data, family='bernoulli')
 summary(m_trial)
 exp(summary(m_trial)$fixed[2, c(1, 3, 4)])
-
-## Does the trial effect depend on the type of game?
-regr = standardize(correct ~ trial_id * type + (1|test_id), data=df, family="binomial", scale=1.0)
-m_type_trial = brm(regr$formula, regr$data, family = 'bernoulli')
-summary(m_type_trial)
 
 ## Does the trial effect depend on whether real or fake was the correct answer?
 regr = standardize(correct ~ trial_id * true_answer + (1|test_id), data=df, family="binomial")
@@ -95,143 +79,81 @@ m_trial_true = brm(regr$formula, data=regr$data, family = "bernoulli",
 summary(m_trial_true)
 
 g = plot(marginal_effects(m_trial_true, "trial_id:true_answer"), plots=F)[[1]] +
+    labs(y="Accuracy", x="Trial number (scaled)") +
     scale_colour_brewer("True answer", palette="Set1", labels=c("Authentic", "Generated")) +
     scale_fill_brewer("True answer", palette="Set1", labels=c("Authentic", "Generated")) +
     theme(legend.box.background = element_rect(fill = "transparent"),
           legend.background = element_rect(fill = "transparent"))
 
-ggsave("../images/trial_effect.png", g, dpi=300, bg="transparent")
+ggsave("../images/trial_effect.pdf", g, width=10, height=6, dpi=300, bg="transparent")
 
 
 # is the time participants took advantageous?
-regr = standardize(correct ~ time * type + (1|test_id), data=df, family = 'binomial')
+regr = standardize(correct ~ time + (1|test_id), data=df, family = 'binomial')
 mod <- glmer(regr$formula, data=regr$data, family="binomial")
 summary(mod)
 Anova(mod) # no, it appears that participants perform worse when they
            # take more time. How to explain this? Is that because the 
            # examples are harder? Or is that irrespective of the 
            # difficulty of the examples?
-plot_model(mod, type="pred", terms=c("time", "type"))
-
-## test for generation level effects (since we noticed a training effect
-## incorporate this into the model as an interaction effect)
-df_gen <- df[((df$true_answer == 0) & (df$type == "forreal")) | df$type == "choose",]
 
 # test for differences between language models. First for forreal questions
-m_correct_forreal <- brm(correct ~ genlevel + (1|test_id), data=df, family='bernoulli')
-summary(m_correct_forreal)
-plot(m_correct_forreal)
+m_genlevel <- brm(correct ~ genlevel + (1|test_id), data=df[df$true_answer == 0,],
+                  family='bernoulli')
+summary(m_genlevel)
+plot(m_genlevel)
 
-p_genlevel_forreal = marginal_effects(m_correct_forreal, "genlevel")
-marginal_effects_table(m_correct_forreal, "genlevel")
+p_genlevel = marginal_effects(m_genlevel, "genlevel")
+marginal_effects_table(m_genlevel, "genlevel")
 
-g = plot(marginal_effects(m_correct_c_g_forreal, "genlevel"), plots=F)[[1]] +
+hypothesis(m_genlevel, "genlevelsyl < 0")
+hypothesis(m_genlevel, "genlevelhybrid < 0")
+
+g = plot(marginal_effects(m_genlevel, "genlevel"), plots=F)[[1]] +
     labs(y="Accuracy", x="Generation Model") + ylim(c(0.45, 0.7)) + 
     theme(legend.box.background = element_rect(fill = "transparent"),
           legend.background = element_rect(fill = "transparent"))
 
-ggsave("../images/genlevel.png", g, dpi=300, bg="transparent")
+ggsave("../images/genlevel.pdf", g, dpi=300, bg="transparent")
 
-# Next, test choose questions
-m_correct_choose <- brm(correct ~ genlevel + (1|test_id),
-                         data=df_gen[df_gen$type == "choose",],
-                        family='bernoulli')
+# next we can do the same with conditional (we will also combine them in a single model)
+m_condition <- brm(correct ~ conditional + (1|test_id), data=df[df$true_answer == 0,],
+                   family='bernoulli')
+summary(m_condition)
+plot(m_condition)
 
-summary(m_correct_choose)
-plot(m_correct_choose)
+p_condition = marginal_effects(m_condition, "conditional")
+marginal_effects_table(m_condition, "conditional")
 
-p_genlevel_choose = marginal_effects(m_correct_choose, "genlevel")
-marginal_effects_table(m_correct_choose, "genlevel")
+g = plot(marginal_effects(m_condition, "conditional"), plots=F)[[1]] +
+    labs(y="Accuracy", x="Conditioning") + ylim(c(0.45, 0.7)) + 
+    theme(legend.box.background = element_rect(fill = "transparent"),
+          legend.background = element_rect(fill = "transparent"))
 
-plots = cowplot::plot_grid(plot(p_genlevel_forreal)[[1]] + ylim(c(0.45, 0.7)),
-                           plot(p_genlevel_choose)[[1]] + ylim(c(0.45, 0.7)),
-                           labels = c("a)", "b)"), align="h")
-cowplot::save_plot("../images/genlevel-marginals.pdf", plots, dpi=300, base_width=10,
-                   base_height=5, base_aspect_ratio = 1.3)
-
-## # include differences between game types
-regr = standardize(correct ~ genlevel * type + (1|test_id), data=df_gen,
-                   family = 'binomial', scale=1)
-m_correct_t = brm(regr$formula, data=regr$data, family = "bernoulli")
-summary(m_correct_t)
-
-marginal_effects_table(m_correct_t, "genlevel:type")
-
-# next we can do the same with conditional (we might also combine them in a single model)
-
-# forreal
-m_correct_c_forreal = brm(correct ~ conditional + (1|test_id),
-                  data=df_gen[df_gen$type == "forreal",], family = 'bernoulli')
-summary(m_correct_c_forreal)
-
-p_conditional_forreal = marginal_effects(m_correct_c_forreal, "conditional")
-marginal_effects_table(m_correct_c_forreal, "conditional")
-
-# choose
-m_correct_c_choose = brm(correct ~ conditional + (1|test_id),
-                  data=df_gen[df_gen$type == "choose",], family = 'bernoulli')
-summary(m_correct_c_choose)
-
-p_conditional_choose = marginal_effects(m_correct_c_choose, "conditional")
-marginal_effects_table(m_correct_c_choose, "conditional")
-
-# plot
-plots = cowplot::plot_grid(plot(p_conditional_forreal)[[1]] + ylim(c(0.48, 0.68)),
-                           plot(p_conditional_choose)[[1]] + ylim(c(0.48, 0.68)),
-                           labels = c("a)", "b)"), align="h")
-cowplot::save_plot("../images/conditioned-marginals.pdf", plots, dpi=300, base_width=10,
-                   base_height=5, base_aspect_ratio = 1.3)
-
-# conditional with type as interaction 
-regr = standardize(correct ~ conditional * type + (1|test_id), data=df_gen, family = 'binomial', scale=1)
-m_correct_cond = brm(regr$formula, data=regr$data, family = 'bernoulli')
-summary(m_correct_cond)
-
-
-p_conditional = marginal_effects(m_correct_cond, "conditional:type")
-marginal_effects_table(m_correct_cond, "conditional:type")
-
-plots = cowplot::plot_grid(plot(p_genlevel)[[1]], plot(p_conditional)[[1]], labels = c("a)", "b)"), align="h")
-cowplot::save_plot("../images/model-interactions.pdf", plots, dpi=300, base_width=10,
-                   base_height=5, base_aspect_ratio = 1.3)
+ggsave("../images/conditioning.pdf", g, dpi=300, bg="transparent")
 
 # Next, investigate interactions between genlevel and conditional
 # First, forreal:
 regr = standardize(correct ~ genlevel * conditional + (1|test_id),
-                   data=df, family = 'binomial', scale = 1)
-m_correct_c_g_forreal = brm(regr$formula, data=regr$data, family = 'bernoulli',
-                            control=list(max_treedepth=20))
-summary(m_correct_c_g_forreal)
+                   data=df[df$true_answer == 0,], family = 'binomial', scale = 1)
+m_genlevel_condition = brm(regr$formula, data=regr$data, family = 'bernoulli',
+                           control=list(max_treedepth=20))
+summary(m_genlevel_condition)
+plot(m_genlevel_condition)
 
-m_correct_genlevel_cond_forreal_eff = marginal_effects(
-    m_correct_c_g_forreal, "genlevel:conditional")
-marginal_effects_table(m_correct_c_g_forreal, "genlevel:conditional")
+p_genlevel_condition = marginal_effects(m_genlevel_condition, "genlevel:conditional")
+marginal_effects_table(m_genlevel_condition, "genlevel:conditional")
 
-g = plot(marginal_effects(m_correct_c_g_forreal, "genlevel:conditional"), plots=F)[[1]] +
+g = plot(marginal_effects(m_genlevel_condition, "genlevel:conditional"), plots=F)[[1]] +
     scale_colour_brewer("Conditioning", palette="Set1", labels=c("yes", "no")) +
     scale_fill_brewer("Conditioning", palette="Set1", labels=c("yes", "no")) +
-    ylim(c(0.45, 0.7)) + labs(y="Accuracy", x="Generation Model") +
+    labs(y="Accuracy", x="Generation Model") +
     theme(legend.box.background = element_rect(fill = "transparent"),
           legend.background = element_rect(fill = "transparent"))
 
-ggsave("../images/genlevel-conditioning.png", g, dpi=300, bg="transparent")
+ggsave("../images/genlevel-conditioning.pdf", g, width = 10, height = 6,
+       dpi=300, bg="transparent")
 
-
-# Next, choose
-regr = standardize(correct ~ conditional * genlevel + (1|test_id),
-                   data=df_gen[df_gen$type == "choose",], family = 'binomial', scale = 1)
-m_correct_c_g_choose = brm(regr$formula, data=regr$data, family = 'bernoulli')
-summary(m_correct_c_g_choose)
-
-m_correct_genlevel_cond_choose_eff = marginal_effects(
-    m_correct_c_g_choose, "genlevel:conditional")
-marginal_effects_table(m_correct_c_g_choose, "genlevel:conditional")
-
-plots = cowplot::plot_grid(plot(m_correct_genlevel_cond_forreal_eff)[[1]],
-                           plot(m_correct_genlevel_cond_choose_eff)[[1]],
-                           labels = c("a)", "b)"), align = "h")
-cowplot::save_plot("../images/cond-gen-interactions.pdf", plots, dpi=300, base_width = 10,
-                   base_height = 5, base_aspect_ratio = 1.3)
 
 ##########################################################################################
 ## Perceived authenticity
@@ -254,6 +176,13 @@ plot(p_baseline)
 b <- summary(p_baseline)$fixed[1, c(1, 3, 4)]
 round(exp(b), 1)
 
+coda = posterior_samples(p_baseline)
+a = data.frame(original = coda[,1])
+a = apply(a, 2, function(x) 1 / (1 + exp(-x)))
+tn = t(as.matrix(apply(a, 2, function(x) quantile(x, probs=c(.5, .025, .975)))))
+tn = round(tn * 100, 2)
+tn
+
 # as the game progresses, does the bias change?
 regr = standardize(perceived ~ trial_id + (1|test_id), data=df, family = 'binomial')
 m_trial_bias = brm(regr$formula, data=regr$data, family="bernoulli",
@@ -264,11 +193,11 @@ b <- summary(m_trial_bias)$fixed[, c(1, 3, 4)]
 round(exp(b), 1)
 
 g = plot(marginal_effects(m_trial_bias, "trial_id"), plots=F)[[1]] +
-    labs(y="Probability authentic perception", x="Trial") + 
+    labs(y="Probability authentic perception", x="Trial number (scaled)") + 
     theme(legend.box.background = element_rect(fill = "transparent"),
           legend.background = element_rect(fill = "transparent"))
 
-ggsave("../images/trial_bias.png", g, dpi=300, bg="transparent")
+ggsave("../images/trial_bias.pdf", g, width=10, height=6, dpi=300, bg="transparent")
 
 ##########################################################################################
 ## Linguistic Feature analysis
@@ -281,10 +210,6 @@ df <- df[df$user_answer != 0,] # remove unanswered
 df$user_answer <- 2 - df$user_answer
 df$true_answer <- 2 - df$true_answer
 df$perceived <- df$user_answer
-df[df$type == "choose" & df$source == "fake" & df$correct == "True", "perceived"] = 0
-df[df$type == "choose" & df$source == "real" & df$correct == "True", "perceived"] = 1
-df[df$type == "choose" & df$source == "fake" & df$correct == "False", "perceived"] = 1
-df[df$type == "choose" & df$source == "real" & df$correct == "False", "perceived"] = 0
 df$trial_id = df$level * 5 + df$iteration
 df = df[df$trial_id <= 11,] # 10 rounds + sudden death
 df$perceived = factor(df$perceived, levels=c(0, 1), labels=c("generated", "authentic"))
@@ -293,11 +218,7 @@ df <- df[df$test_id %in% names(table(df$test_id))[table(df$test_id) >= 10],]
 df$test_id <- as.factor(df$test_id)
 df$time = df$time / 1000 # convert to seconds
 df$time[df$time > 15] = 15
-
-## # choose items are represented by two rows, one for the generated fragment
-## # and one for the authentic fragment. We only need to include one of them in 
-## # the analysis, so we remove all real rows in choose rows.
-## df <- df[df$type == "forreal" | (df$type == "choose" & df$source == "real"),]
+df <- df[df$type == "forreal",]
 
 ## df$correct <- abs(1 - as.integer(df$correct))
 ## scores = df %>% group_by(test_id) %>% summarise(score = sum(correct))
@@ -348,7 +269,7 @@ df[, c("source", "modeltype", predictors)] %>% group_by(source, modeltype) %>%
 
 
 formula <- as.formula(paste("source ~ (", paste(predictors, collapse = "+"), ")"))
-regr = standardize(formula, data=df[df$type == "forreal",], family = "binomial", scale=0.5)
+regr = standardize(formula, data=df, family = "binomial", scale=0.5)
 m_objective = brm(regr$formula, data=regr$data, family = "bernoulli")
 summary(m_objective)
 
@@ -358,16 +279,17 @@ round(exp(b), 1)
 p_objective <- plot_model(m_objective, show.values = TRUE,
            title = "Objective feature importance", bpe = "mean",
            prob.inner = .5,
-           value.size=8,
-           label.size=8,
+           ## value.size=8,
+           ## label.size=8,
            prob.outer = .95,
            transform = NULL
            )
 
 formula = as.formula(paste("perceived ~ (", paste(predictors, collapse = "+"), ") + (1|test_id)"))
-regr <- standardize(formula, data=df[df$type == "forreal",], family = "binomial", scale = 0.5)
+regr <- standardize(formula, data=df, family = "binomial", scale = 0.5)
 m_subjective = brm(regr$formula, data=regr$data, family = "bernoulli",
                    control=list(adapt_delta=0.95))
+
 summary(m_subjective)
 
 b <- summary(m_subjective)$fixed[, c(1, 3, 4)]
@@ -377,13 +299,13 @@ p_subjective <- plot_model(m_subjective, show.values = TRUE,
            title = "Subjective feature importance", bpe = "mean",
            prob.inner = .5,
            prob.outer = .95,
-           value.size=8,
+           ## value.size=8,
            transform = NULL,
            geom.label.size = 0
            ) + ylim(c(-0.75, 0.75)) + theme(axis.text.y.left = element_text(size=0))
 
 plots = cowplot::plot_grid(p_objective, NULL, p_subjective, nrow=1,
                            align="h", rel_widths = c(1.45, 0.1, 1))
-cowplot::save_plot("../images/feature-importance.png", plots, dpi=300, base_width=15,
+cowplot::save_plot("../images/feature-importance.pdf", plots, dpi=300, base_width=15,
                    base_height=8, bg = "transparent")
 

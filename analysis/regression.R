@@ -25,7 +25,7 @@ set_theme(base=theme_sjplot(),
           legend.item.size = 1,
           legend.size = 1.5)
 
-df <- read.csv("../data/db_data.csv")
+df <- read.csv("../data/sources/db_data.csv")
 df <- df[df$user_answer != 0,]
 df$user_answer <- 2 - df$user_answer
 df$true_answer <- 2 - df$true_answer
@@ -100,8 +100,9 @@ g <- plot(marginal_effects(m_trial_true, "trial_id:true_answer"), plots=F)[[1]] 
     scale_fill_brewer("True answer", palette=palette, labels=c("Authentic", "Generated")) +
     theme(legend.box.background = element_rect(fill = "transparent"),
           legend.position="bottom",
-          legend.background = element_rect(fill = "transparent"), text=element_text(size=14)
-    ) + labs(x="Trial id", y="")
+          legend.background = element_rect(fill = "transparent"),
+          text=element_text(size=14)
+    ) + labs(x="Trial id", y="Correct")
 
 
 ggsave("../images/trial_effect.png", g, dpi=300, bg="transparent")
@@ -205,11 +206,15 @@ m_correct_genlevel_cond_forreal_eff = marginal_effects(
 marginal_effects_table(m_correct_c_g_forreal, "genlevel:conditional")
 
 g = plot(marginal_effects(m_correct_c_g_forreal, "genlevel:conditional"), plots=F)[[1]] +
-    scale_colour_brewer("Conditioning", palette="Set1", labels=c("yes", "no")) +
-    scale_fill_brewer("Conditioning", palette="Set1", labels=c("yes", "no")) +
-    ylim(c(0.45, 0.7)) + labs(y="Accuracy", x="Generation Model") +
+    scale_colour_brewer("Conditional", palette=palette, labels=c("Yes", "No")) +
+    scale_fill_brewer("Conditional", palette=palette, labels=c("Yes", "No")) +
+    ylim(c(0.48, 0.68)) + labs(y="Accuracy", x="") +
     theme(legend.box.background = element_rect(fill = "transparent"),
-          legend.background = element_rect(fill = "transparent"))
+          legend.background = element_rect(fill = "transparent"),
+          legend.position = "bottom",
+          text=element_text(size=14)#, axis.x.text=element_text(10)
+          ) + scale_x_discrete(
+              labels=c("char"="Character", "hybrid"="Hierarchical", "syl"="Syllable"))
 
 ggsave("../images/genlevel-conditioning.png", g, dpi=300, bg="transparent")
 

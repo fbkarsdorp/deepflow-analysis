@@ -59,6 +59,7 @@ head(df)
 
 ## First test for a baseline model
 prop.table(table(df$correct))
+
 m_baseline <- brm(correct ~ 1 + (1|test_id), data=df,
                   family="bernoulli",
                   prior=c(set_prior("normal(0, 5)", class="Intercept"),
@@ -241,6 +242,7 @@ g = plot(marginal_effects(m_genlevel_condition, "genlevel:conditional"), plots=F
 ggsave("../images/Fig4.pdf", g, width = 10, height = 6, dpi=300)
 
 w <- loo_compare(m_genlevel, m_condition, m_genlevel_condition, criterion = "waic")
+
 print(w, simplify=FALSE)
 cbind(waic_diff = w[, 1] * -2, se        = w[, 2] * 2)
 model_weights(m_genlevel, m_condition, m_genlevel_condition, weights="waic")
